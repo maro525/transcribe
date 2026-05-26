@@ -9,3 +9,6 @@ onnxruntime==1.20.1
 torch
 torchaudio
 openai-whisper
+fastapi
+uvicorn[standard]
+jinja2

@@ -17,6 +17,7 @@ def watch_folder(
     process_file: Callable[[Path], None],
     extensions: tuple[str, ...] = (".mp3", ".wav", ".m4a"),
     interval_seconds: int = 30,
+    on_discover: Callable[[Path], None] | None = None,
 ) -> None:
     source_dir.mkdir(parents=True, exist_ok=True)
     print("Watching folder:", source_dir)
@@ -27,6 +28,10 @@ def watch_folder(
             for name in os.listdir(source_dir)
             if name.lower().endswith(extensions)
         ]
+
+        if on_discover is not None:
+            for file_path in files:
+                on_discover(file_path)
 
         if not files:
             print(f"No new files. Waiting {interval_seconds} seconds...")

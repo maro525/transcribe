@@ -18,6 +18,9 @@ MIN_SEGMENT_SECONDS = 0.3
 SUPPORTED_EXTENSIONS = (".mp3", ".wav", ".m4a")
 WATCH_INTERVAL_SECONDS = 30
 
+WEB_HOST = os.environ.get("WEB_HOST", "127.0.0.1")
+WEB_PORT = int(os.environ.get("WEB_PORT", "8000"))
+
 
 def ensure_directories() -> None:
     for directory in [SOURCE_DIR, OUTPUT_DIR, DONE_DIR, TEMP_DIR, CACHE_DIR]:

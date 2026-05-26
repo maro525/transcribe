@@ -1,0 +1,33 @@
+<div class="status-bar">{{ system_message }}</div>
+{% if jobs %}
+<table>
+    <thead>
+        <tr>
+            <th>ファイル</th>
+            <th>状態</th>
+            <th>セグメント</th>
+            <th>最新</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for job in jobs %}
+        <tr>
+            <td>{{ job.filename }}</td>
+            <td><span class="state state-{{ job.state }}">{{ job.state }}</span></td>
+            <td>{{ job.segments_completed }}</td>
+            <td class="current">{{ job.current_text or '' }}</td>
+            <td>
+                {% if job.state == 'done' and job.output_path %}
+                    <a hx-get="/jobs/{{ job.filename }}/transcript" hx-target="#viewer" hx-swap="innerHTML">表示</a>
+                {% elif job.state == 'error' %}
+                    <span style="color:#a33; font-size:0.8rem">{{ job.error }}</span>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<div class="empty">音声ファイルを <code>input/</code> に入れてください</div>
+{% endif %}

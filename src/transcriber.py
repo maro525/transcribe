@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import torch
 
@@ -23,6 +24,7 @@ def diarize_and_transcribe(
     num_speakers: int | None = None,
     sample_rate: int = 16000,
     min_segment_seconds: float = 0.3,
+    on_segment: Callable[[TranscriptSegment], None] | None = None,
 ) -> list[TranscriptSegment]:
     print(f"Processing: {file_path}")
     wav_path, temporary_file_created = ensure_wav(file_path, temp_dir, sample_rate)
@@ -54,6 +56,8 @@ def diarize_and_transcribe(
             )
             results.append(row)
             print(f"[{row.start:.1f}s - {row.end:.1f}s] {row.speaker}: {row.text}")
+            if on_segment is not None:
+                on_segment(row)
 
         return results
     finally:
