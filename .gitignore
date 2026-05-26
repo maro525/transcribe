@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Environment
+.env
+
+# Cache / temp (runtime-generated)
+model_cache/
+tmp_audio/
+
+# Content dirs (keep folders, ignore contents)
+input/*
+!input/.gitkeep
+output/*
+!output/.gitkeep
+done/*
+!done/.gitkeep
+
+# OS
+.DS_Store
