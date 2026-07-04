@@ -203,6 +203,8 @@ src/live/
 20. `[team-implement] DECISION` バッチ一時停止フラグは `src/live/state.py` の `threading.Event` に分離（watcher/worker が torch 等を import せずに参照できるように）。watcher は一時停止中も `on_discover` を呼び、新規ファイルは queued としてダッシュボードに出る。
 21. `[team-implement] NOTE` ライブ中でも「処理中のバッチジョブ」は中断しない（次のファイルから停止）。ライブ開始時に GPU 競合の窓が残る点は v1 の既知制約。
 22. `[team-implement] NOTE` バッチモデルは常駐のまま（unload しない）。VRAM が逼迫する環境では f16 でなく q8_0/q5_0 を使う運用で回避。レジストリ化（models.py）により将来 unload フックを足せる構造にした。
+23. `[team-review] POST` 第1回判定 FAIL。major 1（ライブドラフトのセッション跨ぎ混線）+ minor 7。テスト 27/27 PASS。逐次転写/ブラウザ経路は依存不在で未検証 → deploy 前実機スモークを必須化。
+24. `[team-review] POST` 第2回再レビュー: **PASS**。FAIL 全指摘（major 1 + minor 7）を 4a456cc で解消、リグレッションなし、29/29 PASS。OpenCode 指摘「bounded queue の無差別ドロップ (major)」は replay/draft 永続による回復可能性を根拠に minor へ降格。申し送り minor 4 件（overflow 時の final 温存方式、_origin_allowed のプロキシ境界、_filter_params の best-effort 性、worker 専有状態の過剰ロック注記）は次タスク扱い。
 
 ### 作成・変更ファイル
 - 新規 `src/live/__init__.py, state.py, engine.py, vad.py, streaming.py, session.py, keywords.py`
@@ -247,8 +249,12 @@ src/live/
   - vad.py: 未使用の `SileroVad.reset()` を削除。
 - 修正後テスト: **29/29 PASS**（回帰 2 件追加）。
 
-### 第2回判定: PASS（条件付き）
-- 残申し送り（コード変更不要 / deploy ゲート）: 依存導入環境での実機スモーク必須 — pywhispercpp transcribe パラメータ実整合、Silero VAD 実挙動、ブラウザ E2E、input/ 引き継ぎ→バッチ完走、GPU ビルド。状態文字列の Enum 化・LiveSessionManager の責務分離は次タスク推奨。
+### 第2回 team-review（修正コミット 4a456cc の検証）: PASS
+- 前回全指摘（major 1 + minor 7）の解消をコードトレース + 回帰テストで確認。critical/major 0。29/29 PASS、py_compile OK。
+- `_unique_session_id` は draft/input/done/temp の 4 箇所を網羅、`start()` が lock 保持のため TOCTOU なし。`_state_lock` は非再入でもデッドロック経路なし。`_make_emit` は stop() ドレイン中の正規 final を通過させ、60s タイムアウト後の遅延 emit のみ破棄することを確認。
+- Security: WS Origin 検証は CSWSH への正の防御。bounded queue は slow-client DoS を緩和。認証は既存 localhost trust-all を踏襲（劣化なし）。
+- 申し送り（minor、次タスク可）: overflow 時に partial 優先破棄で final/error を温存する方式、`_origin_allowed` のプロキシ/`X-Forwarded-Host` 境界、`_filter_params` の best-effort 性、worker 専有状態の過剰ロック注記。
+- **deploy ゲート（残置)**: 依存導入環境での実機スモーク必須 — pywhispercpp transcribe パラメータ実整合、Silero VAD 実挙動、ブラウザ E2E、input/ 引き継ぎ→バッチ完走、GPU ビルド。状態文字列の Enum 化・LiveSessionManager の責務分離は次タスク推奨。
 
 ## Deploy
 <!-- deploy が記入 -->
