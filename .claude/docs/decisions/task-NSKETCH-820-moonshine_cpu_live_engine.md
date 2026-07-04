@@ -6,7 +6,7 @@
 - related: NSKETCH-819 (feature/live-mode, PR #1)
 - tier: L
 - created: 2026-07-05T00:17:37+09:00
-- status: implemented (team-review 待ち)
+- status: done (PR #2 In Review — 依存導入環境での実機検証 7 項目は引き継ぎ)
 - branch: feature/moonshine-live-engine (from feature/live-mode)
 - base_branch: feature/live-mode
 
@@ -108,6 +108,8 @@
   未使用 logger 削除・fetch の LICENSE 同梱）をレビュー後に適用し全 49 テスト再 PASS。
   Security は safetensors + local_files_only で RCE/ネットワーク露出なしを確認。
   申し送り: 依存環境での未実施検証 7 項目（特に transformers 実 API #3）を deploy へ引き継ぎ。
+- 2026-07-05 [deploy] POST: feature/moonshine-live-engine を push、PR #2（base: feature/live-mode）作成。
+  Linear NSKETCH-820 → In Review、PR リンク添付。未実施検証 7 項目とライセンス登録要件を PR に明記。
 - 2026-07-05 [startproject] PRE: コードベース精読完了（engine.py の Engine Protocol / worker の warmup・
   in-flight 抑制 / session.py の engine_provider 注入 / .gitignore の models/ 除外 / 既存テスト 29 件
   numpy のみで PASS を本環境で確認）。HF API・モデルカード・LICENSE.txt を一次情報として取得し、
@@ -307,4 +309,13 @@ critical / major はゼロ。既存 29 + 新規テスト全通過。変更は op
   transformers 上限の検証済み minor 固定、.claude/rules/security.md 整備。
 
 ## Deploy
-<!-- deploy が記入 -->
+
+- 2026-07-05: `feature/moonshine-live-engine` を origin へ push、PR #2 を作成
+  （base: feature/live-mode — NSKETCH-819 / PR #1 の上に積む構成）。
+- PR: https://github.com/hidemaro-nsketch/transcribe/pull/2
+- コミット: 91df059（実装）/ e192af5（レビュー修正）/ タスクファイル更新
+- Linear: NSKETCH-820 を In Review に更新、PR リンクを添付。
+- PR 本文に依存導入環境での未実施検証 7 項目（transformers 実 API スモーク最重要）と
+  Moonshine AI Community License の登録要件（ユーザー側手続き）を明記。
+- マージ順の注意: PR #1（feature/live-mode → main）が先。本 PR はその後に feature/live-mode
+  へマージするか、PR #1 マージ後に base を main に付け替える。
