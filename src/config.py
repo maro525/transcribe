@@ -39,6 +39,22 @@ LIVE_WHISPER_THREADS = int(
     os.environ.get("LIVE_WHISPER_THREADS", str(os.cpu_count() or 4))
 )
 
+# --- Live engine selection ---------------------------------------------------
+# auto: CUDA host -> whispercpp; non-CUDA + moonshine weights present ->
+#       moonshine; else whisper.cpp CPU. Force with whispercpp|moonshine.
+# moonshine is opt-in: it only becomes the default once its weights have been
+# fetched (scripts/fetch_moonshine_model.py), so existing CPU deployments keep
+# their behaviour unless they explicitly download the model.
+LIVE_ENGINE = os.environ.get("LIVE_ENGINE", "auto").strip().lower()
+LIVE_MOONSHINE_MODEL_DIR = Path(
+    os.environ.get("LIVE_MOONSHINE_MODEL_DIR", BASE_DIR / "models" / "moonshine-tiny-ja")
+).expanduser()
+# Fixed-length chunking keeps each decode under the moonshine decoder's
+# ~194-token cap (model card: max tokens ~= seconds * 13 -> ~14.9 s ceiling).
+LIVE_MOONSHINE_CHUNK_SECONDS = float(
+    os.environ.get("LIVE_MOONSHINE_CHUNK_SECONDS", "12.0")
+)
+
 LIVE_VAD_THRESHOLD = float(os.environ.get("LIVE_VAD_THRESHOLD", "0.5"))
 LIVE_VAD_MIN_SILENCE_MS = int(os.environ.get("LIVE_VAD_MIN_SILENCE_MS", "500"))
 LIVE_MIN_UTTERANCE_MS = int(os.environ.get("LIVE_MIN_UTTERANCE_MS", "300"))

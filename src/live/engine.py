@@ -10,12 +10,16 @@ happens lazily on first use so the batch-only deployment keeps working.
 """
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 
 import numpy as np
 
 from .. import config
+from .streaming import Engine
+
+logger = logging.getLogger(__name__)
 
 # whisper.cpp rejects buffers shorter than ~1s; pad with trailing silence.
 _MIN_AUDIO_SECONDS = 1.1
@@ -100,14 +104,76 @@ class LiveEngine:
         return {key: value for key, value in params.items() if key in valid}
 
 
-_engine: LiveEngine | None = None
+_engine: Engine | None = None
 _engine_lock = threading.Lock()
 
 
-def get_engine() -> LiveEngine:
-    """Return the process-wide live engine, loading the model on first use."""
+def _cuda_available() -> bool:
+    """True when torch sees a CUDA device (import failure counts as False)."""
+    try:
+        import torch
+
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
+def _moonshine_weights_present() -> bool:
+    return (Path(config.LIVE_MOONSHINE_MODEL_DIR) / "model.safetensors").exists()
+
+
+def _ggml_weights_present() -> bool:
+    return Path(config.LIVE_MODEL_PATH).exists()
+
+
+def _create_engine(choice: str) -> Engine:
+    """Resolve LIVE_ENGINE (auto|whispercpp|moonshine) to a concrete engine.
+
+    The selection (engine + reason) is always logged. ``auto`` prefers the
+    CUDA whisper.cpp path, so GPU hosts keep their existing behaviour;
+    moonshine is picked only when its weights were explicitly fetched (opt-in).
+    """
+    choice = (choice or "auto").strip().lower()
+    if choice == "whispercpp":
+        logger.info("live engine: whispercpp (LIVE_ENGINE=whispercpp)")
+        return LiveEngine()
+    if choice == "moonshine":
+        logger.info("live engine: moonshine (LIVE_ENGINE=moonshine)")
+        # Lazy import: engine_moonshine imports LiveEngineError from this
+        # module, so a top-level import here would be circular.
+        from . import engine_moonshine
+
+        return engine_moonshine.MoonshineEngine()
+    if choice == "auto":
+        if _cuda_available():
+            logger.info("live engine: whispercpp (auto: CUDA available)")
+            return LiveEngine()
+        if _moonshine_weights_present():
+            logger.info(
+                "live engine: moonshine (auto: no CUDA, moonshine weights present)"
+            )
+            from . import engine_moonshine
+
+            return engine_moonshine.MoonshineEngine()
+        if _ggml_weights_present():
+            logger.info(
+                "live engine: whispercpp CPU (auto: no CUDA, no moonshine weights)"
+            )
+            return LiveEngine()
+        raise LiveEngineError(
+            "no live engine weights found — run "
+            "`python scripts/fetch_live_model.py` (whisper.cpp GPU/CPU) or "
+            "`python scripts/fetch_moonshine_model.py` (moonshine CPU)"
+        )
+    raise LiveEngineError(
+        f"invalid LIVE_ENGINE={choice!r} (expected auto|whispercpp|moonshine)"
+    )
+
+
+def get_engine() -> Engine:
+    """Return the process-wide live engine, creating it on first use."""
     global _engine
     with _engine_lock:
         if _engine is None:
-            _engine = LiveEngine()
+            _engine = _create_engine(config.LIVE_ENGINE)
         return _engine

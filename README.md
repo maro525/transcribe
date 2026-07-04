@@ -47,7 +47,8 @@ FastAPI Web ダッシュボード (ジョブ状態をリアルタイム表示)
 │   ├── status.py               # StatusStore（ジョブ状態のインメモリ管理）
 │   ├── live/                   # リアルタイムモード
 │   │   ├── state.py            # ライブ中フラグ（バッチ worker 一時停止の連携）
-│   │   ├── engine.py           # whisper.cpp (pywhispercpp) ラッパ
+│   │   ├── engine.py           # whisper.cpp (pywhispercpp) ラッパ + エンジン選択（LIVE_ENGINE）
+│   │   ├── engine_moonshine.py # Moonshine (transformers) CPU 向けエンジン
 │   │   ├── vad.py              # Silero VAD + 発話区間検出の状態機械
 │   │   ├── streaming.py        # 転写ワーカー（partial スケジューラ / final 優先）
 │   │   ├── session.py          # LiveSessionManager（WAV 保存 → input/ 引き継ぎ）
@@ -56,9 +57,10 @@ FastAPI Web ダッシュボード (ジョブ状態をリアルタイム表示)
 │       ├── app.py              # FastAPI ルート（/, /jobs, /events, /live, WS）
 │       └── templates/          # index.html / live.html / partials
 ├── scripts/
-│   └── fetch_live_model.py     # ggml モデル重みの取得
+│   ├── fetch_live_model.py     # ggml モデル重みの取得
+│   └── fetch_moonshine_model.py # Moonshine モデル重みの取得（ライセンス注意表示つき）
 ├── tests/                      # 単体テスト（pytest 互換、直接実行も可）
-├── models/                     # ライブ用 ggml モデル重み（git 管理外）
+├── models/                     # ライブ用モデル重み（ggml / moonshine、git 管理外）
 ├── input/                      # 処理対象の音声を置く場所（中身は git 管理外）
 ├── output/                     # 書き起こし結果の出力先（git 管理外）
 └── done/                       # 処理済み音声の移動先（git 管理外）
@@ -154,8 +156,11 @@ python main.py
 
 | 変数名 | デフォルト | 説明 |
 | --- | --- | --- |
+| `LIVE_ENGINE` | `auto` | ライブエンジン選択（`auto` / `whispercpp` / `moonshine`）。`auto` は CUDA 検出時に whispercpp、非 CUDA かつ moonshine 重みありで moonshine、それ以外は whispercpp CPU |
 | `LIVE_MODEL_QUANT` | `q8_0` | ggml モデルの量子化（`f16` / `q8_0` / `q5_0`） |
 | `LIVE_MODEL_PATH` | `models/ggml-large-v3-turbo-<quant>.bin` | モデル重みのパス（指定時は `LIVE_MODEL_QUANT` より優先） |
+| `LIVE_MOONSHINE_MODEL_DIR` | `models/moonshine-tiny-ja` | Moonshine 重みディレクトリ |
+| `LIVE_MOONSHINE_CHUNK_SECONDS` | `12.0` | Moonshine の長尺分割チャンク長（秒）。decoder のトークン上限（約 194）対策 |
 | `LIVE_LANGUAGE` | `ja` | 逐次転写の言語 |
 | `LIVE_WHISPER_THREADS` | CPU コア数 | whisper.cpp の推論スレッド数 |
 | `LIVE_VAD_THRESHOLD` | `0.5` | 発話判定の確率しきい値 |
@@ -198,7 +203,22 @@ python scripts/fetch_live_model.py
 
 - モデル重みはリポジトリに含めず `models/` に配置します（git 管理外）。openai-whisper のモデルキャッシュとは別物のため、ディスク上は二重に保持されます。
 - **GPU 利用**: PyPI の pywhispercpp wheel は CPU ビルドです。CUDA で推論する場合は `GGML_CUDA=1 pip install pywhispercpp --no-binary pywhispercpp`（CUDA toolkit 必須）でソースビルドしてください。ビルドできない場合も CPU（q5_0 推奨）で動作します。
-- CPU 環境では `LIVE_MODEL_QUANT=q5_0`（約 550 MB）+ `LIVE_PARTIAL_INTERVAL_SECONDS=2.5` 程度への緩和を推奨します。
+- CPU 環境で whisper.cpp を使う場合は `LIVE_MODEL_QUANT=q5_0`（約 550 MB）+ `LIVE_PARTIAL_INTERVAL_SECONDS=2.5` 程度への緩和を推奨します。**GPU の無いホストでは後述の Moonshine エンジンの利用を推奨します**（`LIVE_PARTIAL_INTERVAL_SECONDS=1.0` を維持可能）。
+
+### CPU 向け Moonshine エンジン
+
+GPU が使えないホスト向けの軽量ライブエンジンです。[UsefulSensors/moonshine-tiny-ja](https://huggingface.co/UsefulSensors/moonshine-tiny-ja)（27M パラメータ・日本語特化）を transformers 経由で CPU 推論します。
+
+```bash
+# 重みの取得（約 108 MB、models/moonshine-tiny-ja/ に配置。HF_TOKEN 不要）
+python scripts/fetch_moonshine_model.py
+```
+
+- **opt-in 設計**: 重みを取得したホストだけが対象です。`LIVE_ENGINE=auto`（デフォルト）は「CUDA なし + moonshine 重みあり」のときのみ moonshine を選択し、GPU ホストや重み未取得のホストの挙動は変わりません。`LIVE_ENGINE=moonshine` で強制、`LIVE_ENGINE=whispercpp` で無効化できます。
+- **精度**: CER は Fleurs 17.87 / Common Voice 18.3 と large-v3-turbo より明確に劣りますが、ライブ表示のドラフト用途としては許容範囲です。正式な書き起こしは会議終了後のバッチ処理（openai-whisper + pyannote）が従来どおり生成します。
+- **レイテンシ**: 27M モデルのため CPU でも `LIVE_PARTIAL_INTERVAL_SECONDS=1.0` を維持できる想定です（whisper.cpp CPU の 2.5 秒推奨から改善）。長い発話はエンジン内部で 12 秒チャンクに分割して逐次デコードします（`LIVE_MOONSHINE_CHUNK_SECONDS`）。
+- **ライセンスに関する注意**: モデル重みは **Moonshine AI Community License**（MIT ではありません）で配布されています。研究・非商用利用は無償ですが、**商用利用（社内業務利用を含む）は年商 100 万ドル未満でも [moonshine.ai/community-license](https://moonshine.ai/community-license) での登録が必須**です。利用前に登録を済ませてください。
+- `LIVE_LANGUAGE` は日本語単一言語モデルのため無視されます。transformers（`>=4.52,<5`）が追加依存になります（既存の torch を再利用、CUDA 不要）。
 
 ### 使い方
 
