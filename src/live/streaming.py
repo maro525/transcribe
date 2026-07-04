@@ -54,6 +54,9 @@ class TranscriptionWorker:
 
         self._queue: queue.Queue[Any] = queue.Queue()
         self._thread: threading.Thread | None = None
+        # Guards the shared scheduling state below (mutated from both the
+        # audio-feed thread and the worker thread).
+        self._state_lock = threading.Lock()
         self._finalized_ids: set[int] = set()
         self._partial_inflight: set[int] = set()
         self._last_partial_at: dict[int, float] = {}
@@ -81,26 +84,29 @@ class TranscriptionWorker:
             self._thread = None
 
     def on_utterance_update(self, utterance_id: int, audio: np.ndarray, t0: float) -> None:
-        if utterance_id in self._finalized_ids:
-            return
-        if utterance_id in self._partial_inflight:
-            return
-        now = time.monotonic()
-        last = self._last_partial_at.get(utterance_id)
-        if last is not None and now - last < self._partial_interval:
-            return
-        self._last_partial_at[utterance_id] = now
-        self._partial_inflight.add(utterance_id)
+        with self._state_lock:
+            if utterance_id in self._finalized_ids:
+                return
+            if utterance_id in self._partial_inflight:
+                return
+            now = time.monotonic()
+            last = self._last_partial_at.get(utterance_id)
+            if last is not None and now - last < self._partial_interval:
+                return
+            self._last_partial_at[utterance_id] = now
+            self._partial_inflight.add(utterance_id)
         self._queue.put(("partial", utterance_id, np.array(audio, copy=True), t0))
 
     def on_utterance_end(
         self, utterance_id: int, audio: np.ndarray, t0: float, t1: float
     ) -> None:
-        self._finalized_ids.add(utterance_id)
+        with self._state_lock:
+            self._finalized_ids.add(utterance_id)
         self._queue.put(("final", utterance_id, np.array(audio, copy=True), t0, t1))
 
     def on_utterance_cancel(self, utterance_id: int, t0: float) -> None:
-        self._finalized_ids.add(utterance_id)
+        with self._state_lock:
+            self._finalized_ids.add(utterance_id)
         self._queue.put(("cancel", utterance_id, t0))
 
     # --- worker thread ----------------------------------------------------
@@ -124,7 +130,8 @@ class TranscriptionWorker:
             try:
                 self._run_partial(utterance_id, audio, t0)
             finally:
-                self._partial_inflight.discard(utterance_id)
+                with self._state_lock:
+                    self._partial_inflight.discard(utterance_id)
         elif kind == "final":
             _, utterance_id, audio, t0, t1 = job
             text = self._get_engine().transcribe_final(audio)
@@ -152,29 +159,31 @@ class TranscriptionWorker:
             )
 
     def _run_partial(self, utterance_id: int, audio: np.ndarray, t0: float) -> None:
-        if utterance_id in self._finalized_ids:
-            return  # a final is already queued/sent — skip the stale partial
+        with self._state_lock:
+            if utterance_id in self._finalized_ids:
+                return  # a final is already queued/sent — skip the stale partial
 
-        frozen_text, frozen_upto = self._frozen.get(utterance_id, ("", 0))
-        segment = audio[frozen_upto:]
-        if segment.size > self._window_samples:
-            # Freeze text up to the point covered by the previous partial so
-            # re-inference only spans (roughly) the recent window.
-            prev_covered = self._covered.get(utterance_id, 0)
-            if prev_covered > frozen_upto:
-                frozen_text += self._last_text.get(utterance_id, "")
-                frozen_upto = prev_covered
-                segment = audio[frozen_upto:]
-                self._frozen[utterance_id] = (frozen_text, frozen_upto)
+            frozen_text, frozen_upto = self._frozen.get(utterance_id, ("", 0))
+            segment = audio[frozen_upto:]
+            if segment.size > self._window_samples:
+                # Freeze text up to the point covered by the previous partial
+                # so re-inference only spans (roughly) the recent window.
+                prev_covered = self._covered.get(utterance_id, 0)
+                if prev_covered > frozen_upto:
+                    frozen_text += self._last_text.get(utterance_id, "")
+                    frozen_upto = prev_covered
+                    segment = audio[frozen_upto:]
+                    self._frozen[utterance_id] = (frozen_text, frozen_upto)
         if segment.size == 0:
             return
 
         text = self._get_engine().transcribe_partial(segment)
-        self._covered[utterance_id] = int(audio.size)
-        self._last_text[utterance_id] = text
 
-        if utterance_id in self._finalized_ids:
-            return  # finalized while we were transcribing — drop the partial
+        with self._state_lock:
+            self._covered[utterance_id] = int(audio.size)
+            self._last_text[utterance_id] = text
+            if utterance_id in self._finalized_ids:
+                return  # finalized while we were transcribing — drop the partial
         self._emit(
             {
                 "type": "partial",
@@ -185,10 +194,11 @@ class TranscriptionWorker:
         )
 
     def _cleanup(self, utterance_id: int) -> None:
-        self._frozen.pop(utterance_id, None)
-        self._covered.pop(utterance_id, None)
-        self._last_text.pop(utterance_id, None)
-        self._last_partial_at.pop(utterance_id, None)
+        with self._state_lock:
+            self._frozen.pop(utterance_id, None)
+            self._covered.pop(utterance_id, None)
+            self._last_text.pop(utterance_id, None)
+            self._last_partial_at.pop(utterance_id, None)
 
     def _get_engine(self) -> Engine:
         if self._engine is None:

@@ -48,6 +48,7 @@ class LiveSessionManager:
         source_dir: Path | None = None,
         output_dir: Path | None = None,
         temp_dir: Path | None = None,
+        done_dir: Path | None = None,
         engine_provider: Callable[[], Any] | None = None,
         vad_factory: Callable[[], Any] | None = None,
         history_size: int = config.LIVE_FINAL_HISTORY_SIZE,
@@ -56,6 +57,7 @@ class LiveSessionManager:
         self._source_dir = source_dir or config.SOURCE_DIR
         self._output_dir = output_dir or config.OUTPUT_DIR
         self._temp_dir = temp_dir or config.TEMP_DIR
+        self._done_dir = done_dir or config.DONE_DIR
         self._engine_provider = engine_provider or _default_engine_provider
         self._vad_factory = vad_factory or SileroVad
         self._disconnect_finalize_seconds = disconnect_finalize_seconds
@@ -94,8 +96,7 @@ class LiveSessionManager:
             if self._state != "idle":
                 raise LiveSessionError("live session already active")
 
-            started = datetime.now()
-            session_id = started.strftime("%Y%m%d_%H%M")
+            session_id = self._unique_session_id(datetime.now())
             self._temp_dir.mkdir(parents=True, exist_ok=True)
             wav_path = self._temp_dir / f"live_{session_id}.wav"
 
@@ -109,8 +110,15 @@ class LiveSessionManager:
             wav.setsampwidth(2)
             wav.setframerate(config.SAMPLE_RATE)
 
-            worker = TranscriptionWorker(self._engine_provider, self._on_worker_message)
-            segmenter = UtteranceSegmenter(vad.probability)
+            try:
+                worker = TranscriptionWorker(
+                    self._engine_provider, self._make_emit(session_id)
+                )
+                segmenter = UtteranceSegmenter(vad.probability)
+            except Exception as error:
+                wav.close()
+                wav_path.unlink(missing_ok=True)
+                raise LiveSessionError(f"live session init failed: {error}") from error
 
             self._state = "recording"
             self._session_id = session_id
@@ -130,6 +138,8 @@ class LiveSessionManager:
 
     def feed_pcm(self, data: bytes) -> None:
         """Consume one binary WS frame of 16 kHz/mono/Int16 PCM."""
+        if len(data) % 2:  # defend against truncated frames (Int16 = 2 bytes)
+            data = data[:-1]
         with self._lock:
             if self._state != "recording" or not data:
                 return
@@ -240,6 +250,35 @@ class LiveSessionManager:
             self.stop()
         except LiveSessionError:
             pass
+
+    def _make_emit(self, session_id: str) -> Callable[[dict[str, Any]], None]:
+        """Bind worker output to its session: drop messages emitted after the
+        session ended (e.g. an inference that outlived the stop() drain)."""
+
+        def emit(message: dict[str, Any]) -> None:
+            with self._lock:
+                if self._session_id != session_id:
+                    return
+            self._on_worker_message(message)
+
+        return emit
+
+    def _unique_session_id(self, started: datetime) -> str:
+        """Minute-granularity id, uniquified against every artifact location
+        (draft in output/, WAV in input/ and done/, temp WAV) so two sessions
+        within the same minute never share files."""
+        base = started.strftime("%Y%m%d_%H%M")
+        candidate = base
+        counter = 2
+        while (
+            (self._output_dir / f"meeting_{candidate}_live_draft.txt").exists()
+            or (self._source_dir / f"meeting_{candidate}.wav").exists()
+            or (self._done_dir / f"meeting_{candidate}.wav").exists()
+            or (self._temp_dir / f"live_{candidate}.wav").exists()
+        ):
+            candidate = f"{base}_{counter}"
+            counter += 1
+        return candidate
 
     def _dispatch_event(self, worker: TranscriptionWorker, event) -> None:
         if event.kind in ("start", "update"):

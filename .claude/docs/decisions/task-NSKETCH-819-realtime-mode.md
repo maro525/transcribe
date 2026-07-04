@@ -229,7 +229,26 @@ src/live/
 6. CPU 実測レイテンシ（q8_0 / q5_0）と LIVE_PARTIAL_INTERVAL_SECONDS の推奨値検証
 
 ## Review
-<!-- team-review が記入 -->
+
+### 第1回 team-review（tier=L: Claude / OpenCode / Security / Simplify）: FAIL
+- 単体テスト 27/27 PASS、py_compile OK。逐次転写経路（pywhispercpp/Silero/GPU/ブラウザ）はレビュー環境に依存が無く実行不能。
+- **major 1件**: ライブドラフトのセッション跨ぎ混線 — `session_id` が分粒度のため、同一分内の 2 セッションで `output/meeting_..._live_draft.txt` に追記混線（WAV は `_unique_target` で無事）。
+- minor: worker 共有状態ロックなし / outbound Queue 無制限 / feed_pcm の PCM 長未検証 / WS Origin 未検証 / start() 例外時 cleanup 欠如 / SileroVad.reset デッドコード / stop タイムアウト時の遅延 emit のセッション帰属未検証。
+- OpenCode 指摘「stop が in-flight 音声を破棄（major）」は WS 受信ループの await 直列化により非該当と査定し棄却。
+- Security: XSS なし（全て textContent 描画）、機密ハードコードなし、パストラバーサルなし。
+
+### FAIL 対応（DONT-ASK リトライ 1 回目で全指摘を修正）
+- **major 修正**: `_unique_session_id()` を追加 — draft(output/)・WAV(input/・done/)・temp の全アーティファクト位置に対して分粒度 ID を一意化（`_2`, `_3` サフィックス）。回帰テスト `test_two_sessions_same_minute_get_distinct_artifacts` 追加。
+- minor 修正（全件）:
+  - streaming.py: `_state_lock` で feed 側/worker 側の共有状態（finalized_ids/partial_inflight/frozen 等）を保護。推論呼び出しはロック外。
+  - session.py: `_make_emit(session_id)` で worker 出力をセッションに紐付け、セッション終了後の遅延 emit を破棄。奇数長 PCM フレームの防御（末尾 1 byte 切捨て）。start() 途中失敗時に WAV close + 削除。
+  - app.py: WS Origin 検証（cross-site WebSocket hijack 防御、Origin 無しの非ブラウザクライアントは許可）、outbound キュー maxsize=1000 + 溢れ時ドロップ（partial は自己修復、final は再接続 replay で回復）、feed_pcm 例外を error メッセージ化して接続維持。
+  - engine.py: pywhispercpp の `PARAMS_SCHEMA` に対して transcribe kwargs をフィルタ（バインディング版差異で例外でなく品質劣化に留める防御）。
+  - vad.py: 未使用の `SileroVad.reset()` を削除。
+- 修正後テスト: **29/29 PASS**（回帰 2 件追加）。
+
+### 第2回判定: PASS（条件付き）
+- 残申し送り（コード変更不要 / deploy ゲート）: 依存導入環境での実機スモーク必須 — pywhispercpp transcribe パラメータ実整合、Silero VAD 実挙動、ブラウザ E2E、input/ 引き継ぎ→バッチ完走、GPU ビルド。状態文字列の Enum 化・LiveSessionManager の責務分離は次タスク推奨。
 
 ## Deploy
 <!-- deploy が記入 -->

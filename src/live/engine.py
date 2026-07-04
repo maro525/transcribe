@@ -84,8 +84,20 @@ class LiveEngine:
         if audio.size < min_samples:
             audio = np.pad(audio, (0, min_samples - audio.size))
         with self._infer_lock:
-            segments = self._model.transcribe(audio, **params)
+            segments = self._model.transcribe(audio, **self._filter_params(params))
         return "".join(segment.text for segment in segments).strip()
+
+    @staticmethod
+    def _filter_params(params: dict) -> dict:
+        """Drop kwargs the installed pywhispercpp build does not know about,
+        so a binding version mismatch degrades quality instead of raising."""
+        try:
+            from pywhispercpp.constants import PARAMS_SCHEMA
+
+            valid = set(PARAMS_SCHEMA.keys())
+        except Exception:
+            return params
+        return {key: value for key, value in params.items() if key in valid}
 
 
 _engine: LiveEngine | None = None

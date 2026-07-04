@@ -171,6 +171,39 @@ def test_reconnect_cancels_auto_finalize():
         manager.stop()
 
 
+def test_two_sessions_same_minute_get_distinct_artifacts():
+    """Regression: drafts/WAVs from two sessions in the same minute must
+    never share files (review finding, NSKETCH-819)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        manager = _manager(base)
+        for _ in range(2):
+            manager.start()
+            manager.feed_pcm(_pcm_bytes(0.5, 2.0))
+            manager.feed_pcm(_pcm_bytes(0.0, 1.0))
+            manager.stop()
+
+        wavs = sorted((base / "input").glob("meeting_*.wav"))
+        drafts = sorted((base / "output").glob("meeting_*_live_draft.txt"))
+        assert len(wavs) == 2
+        assert len(drafts) == 2
+        assert wavs[0].name != wavs[1].name
+        assert drafts[0].name != drafts[1].name
+        # each draft holds exactly one session's utterances
+        for draft in drafts:
+            content = draft.read_text(encoding="utf-8")
+            assert content.count("これはテスト発話です") == 1
+
+
+def test_feed_pcm_with_odd_length_frame_does_not_crash():
+    with tempfile.TemporaryDirectory() as tmp:
+        manager = _manager(Path(tmp))
+        manager.start()
+        manager.feed_pcm(_pcm_bytes(0.5, 0.5) + b"\x00")  # truncated frame
+        manager.stop()
+        assert manager.status()["state"] == "idle"
+
+
 def test_pause_flag_follows_session_lifecycle():
     with tempfile.TemporaryDirectory() as tmp:
         manager = _manager(Path(tmp))

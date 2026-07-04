@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from queue import Empty
 from typing import Any, AsyncIterator, Callable
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
@@ -19,6 +20,21 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 LifespanFactory = Callable[[FastAPI], AbstractAsyncContextManager]
 HEARTBEAT_SECONDS = 15
 SSE_RETRY_MS = 2000
+LIVE_WS_OUTBOUND_MAXSIZE = 1000
+
+
+def _origin_allowed(websocket: WebSocket) -> bool:
+    """Reject cross-site WebSocket connections (CSWSH defense).
+
+    Browsers always send Origin on WS handshakes; non-browser clients
+    (no Origin header) are allowed, matching the dashboard's trust model.
+    """
+    origin = websocket.headers.get("origin")
+    if not origin:
+        return True
+    host = websocket.headers.get("host", "")
+    origin_host = urlsplit(origin).netloc
+    return bool(host) and origin_host == host
 
 
 def format_sse(
@@ -122,13 +138,26 @@ def create_app(lifespan: LifespanFactory | None = None) -> FastAPI:
 
     @app.websocket("/live/ws")
     async def live_ws(websocket: WebSocket):
+        if not _origin_allowed(websocket):
+            await websocket.close(code=1008)  # policy violation
+            return
         await websocket.accept()
         loop = asyncio.get_running_loop()
-        outbound: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        outbound: asyncio.Queue[dict[str, Any]] = asyncio.Queue(
+            maxsize=LIVE_WS_OUTBOUND_MAXSIZE
+        )
+
+        def enqueue(message: dict[str, Any]) -> None:
+            try:
+                outbound.put_nowait(message)
+            except asyncio.QueueFull:
+                # Slow client: drop the message. Partials self-heal on the
+                # next tick and finals are recoverable via reconnect replay.
+                pass
 
         def listener(message: dict[str, Any]) -> None:
             # Called from worker/session threads — hop onto the event loop.
-            loop.call_soon_threadsafe(outbound.put_nowait, message)
+            loop.call_soon_threadsafe(enqueue, message)
 
         async def sender() -> None:
             while True:
@@ -145,7 +174,14 @@ def create_app(lifespan: LifespanFactory | None = None) -> FastAPI:
                 if message["type"] == "websocket.disconnect":
                     break
                 if message.get("bytes"):
-                    await asyncio.to_thread(live_manager.feed_pcm, message["bytes"])
+                    try:
+                        await asyncio.to_thread(
+                            live_manager.feed_pcm, message["bytes"]
+                        )
+                    except Exception as error:
+                        listener(
+                            {"type": "error", "message": f"audio error: {error}"}
+                        )
                 elif message.get("text"):
                     await _handle_live_control(message["text"], listener)
         except WebSocketDisconnect:

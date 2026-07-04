@@ -46,9 +46,6 @@ class SileroVad:
         with self._torch.no_grad():
             return float(self._model(tensor, _SAMPLE_RATE).item())
 
-    def reset(self) -> None:
-        self._model.reset_states()
-
 
 @dataclass(frozen=True)
 class UtteranceEvent:
