@@ -64,7 +64,7 @@ def main() -> int:
     path = snapshot_download(
         repo_id=HF_REPO_ID,
         local_dir=str(args.dest),
-        allow_patterns=["*.json", "*.safetensors"],
+        allow_patterns=["*.json", "*.safetensors", "LICENSE*", "README*"],
     )
     print(f"Done: {path}")
     print(

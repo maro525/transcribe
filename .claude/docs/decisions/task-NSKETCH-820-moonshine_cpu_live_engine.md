@@ -102,6 +102,12 @@
   循環 import は engine.py 側 MoonshineEngine 参照の遅延化で回避。_ggml_weights_present() ヘルパを
   追加してテストの stdlib monkeypatch を排除。numpy-only 検証 PASS（新規 19 + 既存 29 無回帰）。
   transformers API スモーク・pip 解決・実測レイテンシ・E2E は依存導入環境へ引き継ぎ（未実施検証 1-7）。
+- 2026-07-05 [team-review] POST: 判定 PASS。4 レビュアー統合で critical/major ゼロ。OpenCode の major 3件
+  （chunk_seconds 未検証 / auto フォールバック / set_num_threads global）は承認済み設計・fail-loud・
+  デフォルト非到達を根拠に minor へ整流。うち即時修正可能な 3 件（chunk_seconds バリデーション追加・
+  未使用 logger 削除・fetch の LICENSE 同梱）をレビュー後に適用し全 49 テスト再 PASS。
+  Security は safetensors + local_files_only で RCE/ネットワーク露出なしを確認。
+  申し送り: 依存環境での未実施検証 7 項目（特に transformers 実 API #3）を deploy へ引き継ぎ。
 - 2026-07-05 [startproject] PRE: コードベース精読完了（engine.py の Engine Protocol / worker の warmup・
   in-flight 抑制 / session.py の engine_provider 注入 / .gitignore の models/ 除外 / 既存テスト 29 件
   numpy のみで PASS を本環境で確認）。HF API・モデルカード・LICENSE.txt を一次情報として取得し、
@@ -271,7 +277,34 @@ numpy 1.26.4 対応）。クリーン環境での pip 解決確認は未実施�
 7. /live E2E（ブラウザ→WS→partial/final 表示→バッチ引き継ぎ）
 
 ## Review
-<!-- team-review が記入 -->
+
+### 判定: PASS（2026-07-05、4 レビュアー: Claude / OpenCode / Security / Simplify）
+
+critical / major はゼロ。既存 29 + 新規テスト全通過。変更は opt-in 設計で GPU / バッチ経路に無変更。
+
+#### 統合結果（Lead 整流後）
+- [minor→修正済] `MoonshineEngine.__init__` が chunk_seconds 未検証（Claude / OpenCode 共通指摘）
+  → レビュー後に `0 < s <= 194/13(≈14.9)` のバリデーションを追加（重み検査より前で実行、依存レスでテスト可能）。
+- [minor→修正済] `engine_moonshine.py` の未使用 `logger` / `import logging`（Simplify）→ 削除。
+- [minor→修正済] fetch スクリプトの `allow_patterns` が LICENSE を取りこぼす（OpenCode）
+  → `LICENSE*` / `README*` を追加（ライセンス必須配布物の同梱）。
+- [minor・設計承認済み] auto 分岐は `model.safetensors` の存在のみで判定し、moonshine 構築失敗時に
+  whisper.cpp CPU へ graceful fallback しない → Decision Log の fail-fast 方針どおり。将来検討として申し送り。
+- [minor・設計承認済み] `torch.set_num_threads` はプロセス global（Silero VAD と共有）→ 意図済み・文書化済み。
+- [minor・引き継ぎ] transformers 実 API 経路（AutoProcessor / generate / batch_decode）は本環境で
+  実行不能のため未検証 → 未実施検証 #3（最重要）として deploy / PR に明記。
+- [Security・positive] safetensors 読み込み + `local_files_only=True` で pickle RCE / 推論時ネットワーク露出なし。
+  機密ハードコード無し、重み git 管理外、SQL/XSS/認証サーフェス無し。
+- [プロセス] `.claude/rules/security.md` がリポジトリに不在（一般原則で代替）→ ルール整備を別途起票推奨。
+
+#### テスト実行結果
+- 全 49 通過: 新規 test_engine_select 10/10、test_moonshine_chunking 10/10（レビュー修正後の
+  バリデーションテスト含む）、既存 29 無回帰（keywords 6 / session 9 / streaming_worker 6 / vad_segmenter 8）。
+- py_compile 全 PASS、numpy-only import 成功。ブラウザ確認は非該当（UI 変更なし）。
+
+#### 残りの申し送り（次タスク候補）
+- `"model.safetensors"` リテラルの共有定数化、auto の graceful fallback 検討、
+  transformers 上限の検証済み minor 固定、.claude/rules/security.md 整備。
 
 ## Deploy
 <!-- deploy が記入 -->

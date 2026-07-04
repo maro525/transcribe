@@ -6,8 +6,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Importing the module itself proves it stays import-safe without
 # transformers/torch installed (lazy-import requirement).
+from src.live.engine import LiveEngineError  # noqa: E402
 from src.live.engine_moonshine import (  # noqa: E402
+    MAX_CHUNK_SECONDS,
     TOKENS_PER_SEC,
+    MoonshineEngine,
     chunk_spans,
     token_budget,
 )
@@ -69,6 +72,19 @@ def test_token_budget_stays_under_decoder_cap_for_chunk():
     # the moonshine decoder's 194-token maximum.
     assert token_budget(12.0) < 194
     assert token_budget(14.9) <= 194
+    assert token_budget(MAX_CHUNK_SECONDS) <= 194
+
+
+def test_engine_rejects_out_of_range_chunk_seconds():
+    # Validation fires before the weights check, so it is testable without
+    # model files or transformers installed.
+    for bad in (0.0, -1.0, MAX_CHUNK_SECONDS + 0.1, 30.0):
+        try:
+            MoonshineEngine(chunk_seconds=bad)
+        except LiveEngineError as error:
+            assert "LIVE_MOONSHINE_CHUNK_SECONDS" in str(error)
+            continue
+        raise AssertionError(f"expected LiveEngineError for chunk_seconds={bad}")
 
 
 if __name__ == "__main__":

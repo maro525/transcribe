@@ -22,7 +22,6 @@ the pure helpers below are unit-testable in a numpy-only environment.
 """
 from __future__ import annotations
 
-import logging
 import math
 import re
 import threading
@@ -33,11 +32,12 @@ import numpy as np
 from .. import config
 from .engine import LiveEngineError
 
-logger = logging.getLogger(__name__)
-
 _SAMPLE_RATE = config.SAMPLE_RATE
 # Model-card recommended decode budget (anti-hallucination-loop cap).
 TOKENS_PER_SEC = 13
+# The decoder tops out at ~194 tokens -> ~14.9 s of audio per decode.
+_DECODER_TOKEN_CAP = 194
+MAX_CHUNK_SECONDS = _DECODER_TOKEN_CAP / TOKENS_PER_SEC
 _MIN_TRANSFORMERS = (4, 52)
 _WARMUP_SECONDS = 0.5
 
@@ -72,6 +72,13 @@ class MoonshineEngine:
         chunk_seconds: float = config.LIVE_MOONSHINE_CHUNK_SECONDS,
         n_threads: int = config.LIVE_WHISPER_THREADS,
     ) -> None:
+        if not 0 < chunk_seconds <= MAX_CHUNK_SECONDS:
+            raise LiveEngineError(
+                f"LIVE_MOONSHINE_CHUNK_SECONDS={chunk_seconds} out of range — "
+                f"must be > 0 and <= {MAX_CHUNK_SECONDS:.1f} "
+                f"(decoder cap of {_DECODER_TOKEN_CAP} tokens at "
+                f"{TOKENS_PER_SEC} tokens/sec)"
+            )
         model_dir = Path(model_dir)
         if not (model_dir / "model.safetensors").exists():
             raise LiveEngineError(
