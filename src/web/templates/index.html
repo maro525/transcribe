@@ -22,7 +22,12 @@
             padding: 0.4rem 0.7rem;
             border-radius: 4px;
             margin-bottom: 1rem;
+            display: flex;
+            gap: 0.75rem;
+            justify-content: space-between;
+            align-items: center;
         }
+        .connection-status { color: #888; white-space: nowrap; }
         table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
         th, td {
             padding: 0.55rem 0.6rem;
@@ -80,7 +85,191 @@
 <body>
     <h1>Transcribe Dashboard</h1>
     <p class="subtitle">音声を <code>input/</code> に置くと自動で処理されます。</p>
-    <div hx-get="/jobs" hx-trigger="load, every 2s" hx-swap="innerHTML"></div>
+    <div class="status-bar">
+        <span id="system-message">{{ system_message }}</span>
+        <span id="connection-status" class="connection-status">connecting...</span>
+    </div>
+    <div id="jobs-root">
+        {% include "_jobs.html" %}
+    </div>
     <div id="viewer"></div>
+    <script>
+        (() => {
+            const systemMessage = document.getElementById("system-message");
+            const connectionStatus = document.getElementById("connection-status");
+            const jobsRoot = document.getElementById("jobs-root");
+            const jobs = new Map();
+            let source = null;
+            let opened = false;
+            let consecutiveErrors = 0;
+            let pollingTimer = null;
+
+            const stateOrder = { processing: 0, queued: 1, error: 2, done: 3 };
+
+            function setConnectionStatus(text) {
+                connectionStatus.textContent = text;
+            }
+
+            function sortedJobs() {
+                return Array.from(jobs.values()).sort((a, b) => {
+                    const stateDiff = (stateOrder[a.state] ?? 99) - (stateOrder[b.state] ?? 99);
+                    return stateDiff || a.filename.localeCompare(b.filename);
+                });
+            }
+
+            function appendCell(row, text, className) {
+                const cell = document.createElement("td");
+                if (className) cell.className = className;
+                cell.textContent = text || "";
+                row.appendChild(cell);
+                return cell;
+            }
+
+            function renderJobs() {
+                const currentJobs = sortedJobs();
+                jobsRoot.replaceChildren();
+
+                if (currentJobs.length === 0) {
+                    const empty = document.createElement("div");
+                    empty.className = "empty";
+                    empty.append("音声ファイルを ");
+                    const code = document.createElement("code");
+                    code.textContent = "input/";
+                    empty.append(code, " に入れてください");
+                    jobsRoot.appendChild(empty);
+                    return;
+                }
+
+                const table = document.createElement("table");
+                const thead = document.createElement("thead");
+                const headerRow = document.createElement("tr");
+                ["ファイル", "状態", "セグメント", "最新", ""].forEach((label) => {
+                    const th = document.createElement("th");
+                    th.textContent = label;
+                    headerRow.appendChild(th);
+                });
+                thead.appendChild(headerRow);
+                table.appendChild(thead);
+
+                const tbody = document.createElement("tbody");
+                currentJobs.forEach((job) => {
+                    const row = document.createElement("tr");
+                    appendCell(row, job.filename);
+
+                    const stateCell = document.createElement("td");
+                    const state = document.createElement("span");
+                    state.className = `state state-${job.state}`;
+                    state.textContent = job.state;
+                    stateCell.appendChild(state);
+                    row.appendChild(stateCell);
+
+                    appendCell(row, String(job.segments_completed ?? 0));
+                    appendCell(row, job.current_text || "", "current");
+
+                    const actionCell = document.createElement("td");
+                    if (job.state === "done" && job.output_path) {
+                        const link = document.createElement("a");
+                        link.textContent = "表示";
+                        link.setAttribute("hx-get", `/jobs/${encodeURIComponent(job.filename)}/transcript`);
+                        link.setAttribute("hx-target", "#viewer");
+                        link.setAttribute("hx-swap", "innerHTML");
+                        actionCell.appendChild(link);
+                    } else if (job.state === "error") {
+                        const error = document.createElement("span");
+                        error.style.color = "#a33";
+                        error.style.fontSize = "0.8rem";
+                        error.textContent = job.error || "";
+                        actionCell.appendChild(error);
+                    }
+                    row.appendChild(actionCell);
+                    tbody.appendChild(row);
+                });
+                table.appendChild(tbody);
+                jobsRoot.appendChild(table);
+                if (window.htmx) window.htmx.process(jobsRoot);
+            }
+
+            function applySnapshot(payload) {
+                systemMessage.textContent = payload.system_message || "";
+                jobs.clear();
+                (payload.jobs || []).forEach((job) => jobs.set(job.filename, job));
+                renderJobs();
+            }
+
+            function applyJob(payload) {
+                if (!payload.job || !payload.job.filename) return;
+                jobs.set(payload.job.filename, payload.job);
+                renderJobs();
+            }
+
+            function startPollingFallback() {
+                if (source) source.close();
+                if (pollingTimer) return;
+                setConnectionStatus("polling fallback");
+
+                const poll = async () => {
+                    try {
+                        const response = await fetch("/jobs", { cache: "no-store" });
+                        if (response.ok) {
+                            const wrapper = document.createElement("div");
+                            wrapper.innerHTML = await response.text();
+                            const fallbackStatus = wrapper.querySelector(".status-bar");
+                            if (fallbackStatus) {
+                                systemMessage.textContent = fallbackStatus.textContent || "";
+                                fallbackStatus.remove();
+                            }
+                            jobsRoot.replaceChildren(...Array.from(wrapper.childNodes));
+                            if (window.htmx) window.htmx.process(jobsRoot);
+                        }
+                    } catch (_) {
+                        // Keep trying on the next interval.
+                    }
+                };
+                poll();
+                pollingTimer = window.setInterval(poll, 2000);
+            }
+
+            function addJsonListener(eventName, handler) {
+                source.addEventListener(eventName, (event) => {
+                    try {
+                        handler(JSON.parse(event.data));
+                    } catch (_) {
+                        // Ignore malformed events and wait for the next snapshot/update.
+                    }
+                });
+            }
+
+            if (!window.EventSource) {
+                startPollingFallback();
+                return;
+            }
+
+            source = new EventSource("/events");
+            source.addEventListener("open", () => {
+                opened = true;
+                consecutiveErrors = 0;
+                setConnectionStatus("live");
+            });
+            source.addEventListener("error", () => {
+                setConnectionStatus("reconnecting...");
+                if (!opened) consecutiveErrors += 1;
+                if (!opened && consecutiveErrors >= 3) startPollingFallback();
+            });
+            addJsonListener("snapshot", applySnapshot);
+            addJsonListener("job_registered", applyJob);
+            addJsonListener("job_updated", applyJob);
+            addJsonListener("system_message", (payload) => {
+                systemMessage.textContent = payload.system_message || "";
+            });
+            addJsonListener("reset", () => {
+                setConnectionStatus("reconnecting...");
+                source.close();
+                window.setTimeout(() => {
+                    window.location.reload();
+                }, 200);
+            });
+            addJsonListener("heartbeat", () => {});
+        })();
+    </script>
 </body>
 </html>
