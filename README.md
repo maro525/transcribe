@@ -64,17 +64,64 @@ FastAPI Web ダッシュボード (ジョブ状態をリアルタイム表示)
 └── done/                       # 処理済み音声の移動先（git 管理外）
 ```
 
+## 動作環境
+
+このアプリは Whisper / pyannote / PyTorch を使う **CUDA（NVIDIA GPU）前提の ML スタック**です。以下を推奨します。
+
+| 項目 | 推奨 | 備考 |
+| --- | --- | --- |
+| アーキテクチャ | **x86_64** | GPU 推論に CUDA が必要 |
+| GPU | **NVIDIA GPU（CUDA 対応）** | 無くても CPU で動作するが大幅に遅い |
+| OS | Windows (x64) / Linux / WSL2 | |
+| Python | **3.12** | 3.13 / 3.14 は固定依存のホイールが無く失敗する |
+| ffmpeg | 必須 | 音声の読み込み・変換に使用 |
+
+> ⚠️ **Windows on ARM（ARM64）は非対応**です。NVIDIA CUDA が使えず、torch / pyannote / numba / onnxruntime などの ARM64 向けホイールも揃わないため、依存のインストール自体が通りません。**x86_64 + NVIDIA GPU** のマシンを使ってください。
+
+> ⚠️ **Python は 3.12 を使ってください。** 3.13 / 3.14 では `numpy==1.26.4` などの固定バージョンにホイールが無く、ソースビルド（C コンパイラが必要）に落ちて失敗します。
+
 ## セットアップ
 
-### 1. 依存関係のインストール
+### 1. 仮想環境（Python 3.12）
+
+```bash
+# Windows
+py -3.12 -m venv .venv
+.\.venv\Scripts\activate
+
+# Linux / WSL2 / macOS
+python3.12 -m venv .venv
+source .venv/bin/activate
+```
+
+### 2. PyTorch（CUDA 版）を先にインストール
+
+素の `pip install` では CPU 版が入ることがあるため、GPU を使う場合は PyTorch を**先に** CUDA 版で入れます。`cuXXX` は `nvidia-smi` に表示される CUDA バージョンに合わせてください（例: CUDA 12.4 → `cu124`）。正確なコマンドは [pytorch.org](https://pytorch.org/get-started/locally/) を参照。
+
+```bash
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
+```
+
+> GPU を使わない場合はこの手順を飛ばし、次の手順で入る CPU 版をそのまま使えます（処理は遅くなります）。
+
+### 3. 残りの依存関係をインストール
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Whisper・pyannote・PyTorch を含むため、GPU（CUDA）環境を推奨します（CPU でも動作しますが処理は遅くなります）。
+### 4. ffmpeg
 
-### 2. HuggingFace トークンの設定
+音声の読み込み・変換に必要です。PATH に通してください。
+
+```bash
+# Windows
+winget install ffmpeg
+# Linux / WSL2
+sudo apt install ffmpeg
+```
+
+### 5. HuggingFace トークンの設定
 
 pyannote の話者分離モデルは gated model のため、[HuggingFace のトークン](https://huggingface.co/settings/tokens) が必要です。対象モデル（`pyannote/speaker-diarization-3.1`）の利用規約に同意したうえで、`.env` を作成してトークンを設定してください。
 
