@@ -18,7 +18,15 @@ def watch_folder(
     extensions: tuple[str, ...] = (".mp3", ".wav", ".m4a"),
     interval_seconds: int = 30,
     on_discover: Callable[[Path], None] | None = None,
+    should_pause: Callable[[], bool] | None = None,
 ) -> None:
+    """Poll ``source_dir`` and process new audio files.
+
+    When ``should_pause`` returns True (e.g. a live transcription session
+    holds the GPU), discovered files are still registered via
+    ``on_discover`` so they show up as queued, but processing is deferred
+    until the pause is lifted.
+    """
     source_dir.mkdir(parents=True, exist_ok=True)
     print("Watching folder:", source_dir)
 
@@ -32,6 +40,14 @@ def watch_folder(
         if on_discover is not None:
             for file_path in files:
                 on_discover(file_path)
+
+        if should_pause is not None and should_pause():
+            print(
+                "Live session active. Batch processing paused; "
+                f"retrying in {interval_seconds} seconds..."
+            )
+            time.sleep(interval_seconds)
+            continue
 
         if not files:
             print(f"No new files. Waiting {interval_seconds} seconds...")

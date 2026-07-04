@@ -12,3 +12,7 @@ openai-whisper
 fastapi
 uvicorn[standard]
 jinja2
+
+# Live mode (realtime transcription) — batch pipeline deps above are unchanged
+pywhispercpp
+silero-vad

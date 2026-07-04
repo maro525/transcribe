@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>リアルタイムモード - Transcribe</title>
+    <style>
+        :root { color-scheme: light dark; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+            max-width: 1100px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+            line-height: 1.5;
+        }
+        h1 { font-size: 1.4rem; margin: 0 0 0.25rem; }
+        .subtitle { color: #888; font-size: 0.85rem; margin: 0.25rem 0 1rem; }
+        a { color: #0366d6; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .controls {
+            display: flex;
+            gap: 0.75rem;
+            align-items: center;
+            flex-wrap: wrap;
+            background: rgba(127,127,127,0.08);
+            padding: 0.6rem 0.8rem;
+            border-radius: 6px;
+            margin-bottom: 0.75rem;
+        }
+        .controls select, .controls button {
+            font-size: 0.9rem;
+            padding: 0.35rem 0.9rem;
+            border-radius: 4px;
+            border: 1px solid rgba(127,127,127,0.4);
+            background: transparent;
+            color: inherit;
+        }
+        button.primary {
+            background: #1a7f37;
+            border-color: #1a7f37;
+            color: #fff;
+            cursor: pointer;
+        }
+        button.danger {
+            background: #cf222e;
+            border-color: #cf222e;
+            color: #fff;
+            cursor: pointer;
+        }
+        button:disabled { opacity: 0.45; cursor: not-allowed; }
+        .status-line { font-size: 0.8rem; color: #777; display: flex; gap: 1rem; }
+        .state-badge {
+            display: inline-block;
+            padding: 0.1rem 0.5rem;
+            border-radius: 3px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            background: #e5e5e5; color: #555;
+        }
+        .state-recording { background: #cf222e; color: #fff; }
+        .state-finalizing { background: #fff3cd; color: #856404; }
+        .hint { font-size: 0.75rem; color: #999; margin: 0.25rem 0 1rem; }
+        .layout { display: flex; gap: 1rem; align-items: flex-start; }
+        .transcript-pane {
+            flex: 1;
+            min-height: 300px;
+            max-height: 60vh;
+            overflow-y: auto;
+            border: 1px solid rgba(127,127,127,0.25);
+            border-radius: 6px;
+            padding: 0.8rem 1rem;
+            font-size: 0.95rem;
+        }
+        .keywords-pane {
+            width: 230px;
+            border: 1px solid rgba(127,127,127,0.25);
+            border-radius: 6px;
+            padding: 0.8rem 1rem;
+            font-size: 0.85rem;
+        }
+        .keywords-pane h2 { font-size: 0.8rem; color: #777; margin: 0 0 0.5rem; text-transform: uppercase; }
+        .keywords-pane ul { list-style: none; margin: 0; padding: 0; }
+        .keywords-pane li {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.15rem 0;
+            border-bottom: 1px dashed rgba(127,127,127,0.2);
+        }
+        .keywords-pane .score { color: #999; font-size: 0.75rem; }
+        .utt-final { margin: 0.3rem 0; }
+        .utt-final .t { color: #999; font-size: 0.75rem; margin-right: 0.5rem; font-family: ui-monospace, monospace; }
+        .utt-partial { margin: 0.3rem 0; color: #888; font-style: italic; }
+        .empty-transcript { color: #aaa; text-align: center; padding: 3rem 1rem; }
+        .banner {
+            margin-top: 0.9rem;
+            padding: 0.7rem 1rem;
+            border-radius: 6px;
+            background: #d4edda;
+            color: #155724;
+            font-size: 0.9rem;
+            display: none;
+        }
+        .error-box {
+            margin-top: 0.6rem;
+            padding: 0.5rem 0.9rem;
+            border-radius: 6px;
+            background: #f8d7da;
+            color: #721c24;
+            font-size: 0.85rem;
+            display: none;
+        }
+        code {
+            background: rgba(127,127,127,0.12);
+            padding: 0.05rem 0.35rem;
+            border-radius: 3px;
+            font-size: 0.85em;
+        }
+    </style>
+</head>
+<body>
+    <h1>リアルタイムモード</h1>
+    <p class="subtitle">
+        会議中のライブ文字起こしと重要キーワード表示。終了後は自動でバッチ処理（話者分離つき）に引き継がれます。
+        <a href="/">← バッチモードへ戻る</a>
+    </p>
+
+    <div class="controls">
+        <label>
+            音声ソース:
+            <select id="source">
+                <option value="mic">マイク</option>
+                <option value="system">システム音声（会議アプリ等）</option>
+            </select>
+        </label>
+        <button id="start-btn" class="primary" disabled>録音開始</button>
+        <button id="stop-btn" class="danger" disabled>会議終了</button>
+        <span class="status-line">
+            <span id="state-badge" class="state-badge">idle</span>
+            <span id="elapsed"></span>
+            <span id="connection">connecting...</span>
+        </span>
+    </div>
+    <p class="hint">
+        システム音声を選ぶ場合は、共有ダイアログで対象（画面またはタブ）を選び、
+        <strong>「音声を共有」にチェック</strong>を入れてください。
+    </p>
+
+    <div class="layout">
+        <div id="transcript" class="transcript-pane">
+            <div class="empty-transcript" id="empty-msg">録音を開始すると、ここに文字起こしが表示されます</div>
+        </div>
+        <div class="keywords-pane">
+            <h2>キーワード</h2>
+            <ul id="keywords"><li style="border:none;color:#aaa;">—</li></ul>
+        </div>
+    </div>
+
+    <div id="banner" class="banner"></div>
+    <div id="error-box" class="error-box"></div>
+
+    <script>
+    (() => {
+        const TARGET_RATE = 16000;
+        const CHUNK_SAMPLES = 2048; // 128ms at 16kHz
+
+        const sourceSelect = document.getElementById("source");
+        const startBtn = document.getElementById("start-btn");
+        const stopBtn = document.getElementById("stop-btn");
+        const stateBadge = document.getElementById("state-badge");
+        const elapsedEl = document.getElementById("elapsed");
+        const connectionEl = document.getElementById("connection");
+        const transcriptEl = document.getElementById("transcript");
+        const emptyMsg = document.getElementById("empty-msg");
+        const keywordsEl = document.getElementById("keywords");
+        const bannerEl = document.getElementById("banner");
+        const errorBox = document.getElementById("error-box");
+
+        let ws = null;
+        let wsReady = false;
+        let reconnectDelay = 1000;
+        let serverState = "idle";
+        let currentSessionId = null;
+        let elapsedBase = 0;
+        let elapsedTimer = null;
+
+        let mediaStream = null;
+        let audioContext = null;
+        let workletNode = null;
+        let capturing = false;
+
+        const finalNodes = new Map(); // utterance_id -> element
+        let partialNode = null;
+        let partialId = null;
+
+        // --- AudioWorklet (inline, no external assets) -------------------
+        const workletSource = `
+            class PCMDownsampler extends AudioWorkletProcessor {
+                constructor() {
+                    super();
+                    this.ratio = sampleRate / ${TARGET_RATE};
+                    this.readPos = 0;
+                    this.pending = new Float32Array(0);
+                    this.out = new Int16Array(${CHUNK_SAMPLES});
+                    this.outLen = 0;
+                }
+                process(inputs) {
+                    const channels = inputs[0];
+                    if (!channels || channels.length === 0 || !channels[0]) return true;
+                    const len = channels[0].length;
+                    const mono = new Float32Array(len);
+                    for (let c = 0; c < channels.length; c++) {
+                        const data = channels[c];
+                        for (let i = 0; i < len; i++) mono[i] += data[i] / channels.length;
+                    }
+                    const merged = new Float32Array(this.pending.length + len);
+                    merged.set(this.pending);
+                    merged.set(mono, this.pending.length);
+                    let pos = this.readPos;
+                    while (pos + 1 < merged.length) {
+                        const i = Math.floor(pos);
+                        const frac = pos - i;
+                        const sample = merged[i] * (1 - frac) + merged[i + 1] * frac;
+                        const clamped = Math.max(-1, Math.min(1, sample));
+                        this.out[this.outLen++] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7FFF;
+                        if (this.outLen === ${CHUNK_SAMPLES}) {
+                            const copy = this.out.slice(0);
+                            this.port.postMessage(copy.buffer, [copy.buffer]);
+                            this.outLen = 0;
+                        }
+                        pos += this.ratio;
+                    }
+                    const consumed = Math.floor(pos);
+                    this.pending = merged.slice(consumed);
+                    this.readPos = pos - consumed;
+                    return true;
+                }
+            }
+            registerProcessor("pcm-downsampler", PCMDownsampler);
+        `;
+        const workletUrl = URL.createObjectURL(
+            new Blob([workletSource], { type: "application/javascript" })
+        );
+
+        // --- rendering ----------------------------------------------------
+        function isNearBottom() {
+            return transcriptEl.scrollHeight - transcriptEl.scrollTop - transcriptEl.clientHeight < 60;
+        }
+        function autoScroll(wasNearBottom) {
+            if (wasNearBottom) transcriptEl.scrollTop = transcriptEl.scrollHeight;
+        }
+        function formatTime(seconds) {
+            const s = Math.max(0, Math.floor(seconds));
+            return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+        }
+        function clearTranscript() {
+            finalNodes.clear();
+            partialNode = null;
+            partialId = null;
+            transcriptEl.replaceChildren(emptyMsg);
+            emptyMsg.style.display = "";
+            keywordsEl.replaceChildren();
+        }
+        function showError(message) {
+            errorBox.textContent = message;
+            errorBox.style.display = "block";
+            window.setTimeout(() => { errorBox.style.display = "none"; }, 10000);
+        }
+
+        function applyStatus(msg) {
+            serverState = msg.state;
+            stateBadge.textContent = msg.state;
+            stateBadge.className = "state-badge state-" + msg.state;
+            if (msg.session_id && msg.session_id !== currentSessionId) {
+                currentSessionId = msg.session_id;
+                clearTranscript();
+                bannerEl.style.display = "none";
+            }
+            startBtn.disabled = !(wsReady && msg.state === "idle");
+            stopBtn.disabled = !(wsReady && msg.state === "recording");
+            sourceSelect.disabled = msg.state !== "idle";
+
+            elapsedBase = msg.elapsed_sec || 0;
+            if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
+            if (msg.state === "recording") {
+                const startedAt = Date.now();
+                elapsedEl.textContent = formatTime(elapsedBase);
+                elapsedTimer = window.setInterval(() => {
+                    elapsedEl.textContent = formatTime(elapsedBase + (Date.now() - startedAt) / 1000);
+                }, 1000);
+            } else if (msg.state === "idle") {
+                if (!capturing) elapsedEl.textContent = "";
+            }
+            if (msg.state !== "recording" && capturing) stopCapture();
+        }
+
+        function applyPartial(msg) {
+            if (finalNodes.has(msg.utterance_id)) return; // final already shown
+            const wasNearBottom = isNearBottom();
+            emptyMsg.style.display = "none";
+            if (!partialNode) {
+                partialNode = document.createElement("div");
+                partialNode.className = "utt-partial";
+                transcriptEl.appendChild(partialNode);
+            }
+            partialId = msg.utterance_id;
+            partialNode.textContent = msg.text;
+            autoScroll(wasNearBottom);
+        }
+
+        function applyFinal(msg) {
+            const wasNearBottom = isNearBottom();
+            if (partialNode && partialId === msg.utterance_id) {
+                partialNode.remove();
+                partialNode = null;
+                partialId = null;
+            }
+            if (!msg.text) return; // cancelled utterance — just clear the partial
+            emptyMsg.style.display = "none";
+            let node = finalNodes.get(msg.utterance_id);
+            if (!node) {
+                node = document.createElement("div");
+                node.className = "utt-final";
+                const t = document.createElement("span");
+                t.className = "t";
+                const body = document.createElement("span");
+                body.className = "body";
+                node.append(t, body);
+                finalNodes.set(msg.utterance_id, node);
+                // keep the partial line at the very bottom
+                if (partialNode) transcriptEl.insertBefore(node, partialNode);
+                else transcriptEl.appendChild(node);
+            }
+            node.querySelector(".t").textContent = formatTime(msg.t0 || 0);
+            node.querySelector(".body").textContent = msg.text;
+            autoScroll(wasNearBottom);
+        }
+
+        function applyKeywords(msg) {
+            keywordsEl.replaceChildren();
+            (msg.items || []).forEach((item) => {
+                const li = document.createElement("li");
+                const word = document.createElement("span");
+                word.textContent = item.word;
+                const score = document.createElement("span");
+                score.className = "score";
+                score.textContent = Number(item.score).toFixed(1);
+                li.append(word, score);
+                keywordsEl.appendChild(li);
+            });
+        }
+
+        function applyFinalized(msg) {
+            bannerEl.replaceChildren();
+            bannerEl.append("会議を終了しました。録音をバッチ処理に引き継ぎました: ");
+            const code = document.createElement("code");
+            code.textContent = (msg.wav || "").split("/").pop();
+            bannerEl.append(code, " — ");
+            const link = document.createElement("a");
+            link.href = "/";
+            link.textContent = "ダッシュボードで進捗を見る";
+            bannerEl.append(link);
+            bannerEl.style.display = "block";
+        }
+
+        // --- WebSocket ------------------------------------------------------
+        function connect() {
+            const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+            ws = new WebSocket(protocol + "//" + location.host + "/live/ws");
+            ws.binaryType = "arraybuffer";
+            ws.addEventListener("open", () => {
+                wsReady = true;
+                reconnectDelay = 1000;
+                connectionEl.textContent = "connected";
+                startBtn.disabled = serverState !== "idle";
+            });
+            ws.addEventListener("close", () => {
+                wsReady = false;
+                connectionEl.textContent = "reconnecting...";
+                startBtn.disabled = true;
+                stopBtn.disabled = true;
+                window.setTimeout(connect, reconnectDelay);
+                reconnectDelay = Math.min(reconnectDelay * 2, 15000);
+            });
+            ws.addEventListener("error", () => ws.close());
+            ws.addEventListener("message", (event) => {
+                let msg;
+                try { msg = JSON.parse(event.data); } catch (_) { return; }
+                if (msg.type === "status") applyStatus(msg);
+                else if (msg.type === "partial") applyPartial(msg);
+                else if (msg.type === "final") applyFinal(msg);
+                else if (msg.type === "keywords") applyKeywords(msg);
+                else if (msg.type === "finalized") applyFinalized(msg);
+                else if (msg.type === "error") showError(msg.message || "error");
+            });
+        }
+
+        // --- audio capture ----------------------------------------------------
+        async function captureStream(source) {
+            if (source === "system") {
+                const stream = await navigator.mediaDevices.getDisplayMedia({
+                    video: true,
+                    audio: true,
+                });
+                stream.getVideoTracks().forEach((track) => track.stop());
+                if (stream.getAudioTracks().length === 0) {
+                    stream.getTracks().forEach((track) => track.stop());
+                    throw new Error("音声トラックが取得できません。共有ダイアログで「音声を共有」にチェックを入れてください。");
+                }
+                return stream;
+            }
+            return navigator.mediaDevices.getUserMedia({
+                audio: { echoCancellation: true, noiseSuppression: true },
+            });
+        }
+
+        async function startCapture() {
+            const source = sourceSelect.value;
+            mediaStream = await captureStream(source);
+            audioContext = new AudioContext();
+            await audioContext.audioWorklet.addModule(workletUrl);
+            const input = audioContext.createMediaStreamSource(mediaStream);
+            workletNode = new AudioWorkletNode(audioContext, "pcm-downsampler");
+            workletNode.port.onmessage = (event) => {
+                if (capturing && wsReady && ws.readyState === WebSocket.OPEN) {
+                    ws.send(event.data);
+                }
+            };
+            input.connect(workletNode);
+            capturing = true;
+            // If the user stops sharing from the browser chrome, end the meeting.
+            mediaStream.getAudioTracks().forEach((track) => {
+                track.addEventListener("ended", () => {
+                    if (serverState === "recording") sendStop();
+                });
+            });
+            return source;
+        }
+
+        function stopCapture() {
+            capturing = false;
+            if (workletNode) { workletNode.disconnect(); workletNode = null; }
+            if (audioContext) { audioContext.close(); audioContext = null; }
+            if (mediaStream) {
+                mediaStream.getTracks().forEach((track) => track.stop());
+                mediaStream = null;
+            }
+        }
+
+        function sendStop() {
+            if (wsReady && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "stop" }));
+            }
+            stopCapture();
+        }
+
+        startBtn.addEventListener("click", async () => {
+            startBtn.disabled = true;
+            try {
+                const source = await startCapture();
+                ws.send(JSON.stringify({ type: "start", source }));
+            } catch (error) {
+                stopCapture();
+                showError(error.message || String(error));
+                startBtn.disabled = serverState !== "idle";
+            }
+        });
+
+        stopBtn.addEventListener("click", () => {
+            stopBtn.disabled = true;
+            sendStop();
+        });
+
+        window.addEventListener("beforeunload", () => stopCapture());
+
+        connect();
+    })();
+    </script>
+</body>
+</html>

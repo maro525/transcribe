@@ -11,6 +11,7 @@ venv/
 # Cache / temp (runtime-generated)
 model_cache/
 tmp_audio/
+models/
 
 # Content dirs (keep folders, ignore contents)
 input/*

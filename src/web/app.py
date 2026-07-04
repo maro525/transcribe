@@ -6,10 +6,11 @@ from pathlib import Path
 from queue import Empty
 from typing import Any, AsyncIterator, Callable
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
+from ..live.session import LiveSessionError, manager as live_manager
 from ..status import StoreEvent, store
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -111,4 +112,71 @@ def create_app(lifespan: LifespanFactory | None = None) -> FastAPI:
             },
         )
 
+    @app.get("/live", response_class=HTMLResponse)
+    def live_page(request: Request):
+        return templates.TemplateResponse("live.html", {"request": request})
+
+    @app.get("/live/status")
+    def live_status():
+        return JSONResponse(live_manager.status())
+
+    @app.websocket("/live/ws")
+    async def live_ws(websocket: WebSocket):
+        await websocket.accept()
+        loop = asyncio.get_running_loop()
+        outbound: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+        def listener(message: dict[str, Any]) -> None:
+            # Called from worker/session threads — hop onto the event loop.
+            loop.call_soon_threadsafe(outbound.put_nowait, message)
+
+        async def sender() -> None:
+            while True:
+                message = await outbound.get()
+                await websocket.send_json(message)
+
+        live_manager.add_listener(listener)
+        live_manager.client_connected()
+        live_manager.replay(listener)
+        sender_task = asyncio.create_task(sender())
+        try:
+            while True:
+                message = await websocket.receive()
+                if message["type"] == "websocket.disconnect":
+                    break
+                if message.get("bytes"):
+                    await asyncio.to_thread(live_manager.feed_pcm, message["bytes"])
+                elif message.get("text"):
+                    await _handle_live_control(message["text"], listener)
+        except WebSocketDisconnect:
+            pass
+        finally:
+            sender_task.cancel()
+            live_manager.remove_listener(listener)
+            live_manager.client_disconnected()
+
     return app
+
+
+async def _handle_live_control(
+    raw: str, reply: Callable[[dict[str, Any]], None]
+) -> None:
+    try:
+        control = json.loads(raw)
+        action = control.get("type")
+    except (json.JSONDecodeError, AttributeError):
+        reply({"type": "error", "message": "invalid control message"})
+        return
+
+    try:
+        if action == "start":
+            source = control.get("source", "mic")
+            await asyncio.to_thread(live_manager.start, source)
+        elif action == "stop":
+            await asyncio.to_thread(live_manager.stop)
+        else:
+            reply({"type": "error", "message": f"unknown control type: {action}"})
+    except LiveSessionError as error:
+        reply({"type": "error", "message": str(error)})
+    except Exception as error:
+        reply({"type": "error", "message": f"live session error: {error}"})

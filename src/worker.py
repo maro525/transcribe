@@ -3,11 +3,12 @@ from pathlib import Path
 from . import config
 from .auth import load_hf_token
 from .formatter import save_transcript
+from .live import state as live_state
 from .models import (
+    get_audio_cropper,
     get_device,
-    load_diarization_pipeline,
-    load_whisper_model,
-    make_audio_cropper,
+    get_diarization_pipeline,
+    get_whisper_model,
 )
 from .status import JobState, now_iso, store
 from .transcriber import diarize_and_transcribe
@@ -37,14 +38,14 @@ def run() -> None:
         print("Using device:", device)
         print("Base dir:", config.BASE_DIR)
 
-        whisper_model = load_whisper_model(config.WHISPER_MODEL)
-        diarization_pipeline = load_diarization_pipeline(
+        whisper_model = get_whisper_model(config.WHISPER_MODEL)
+        diarization_pipeline = get_diarization_pipeline(
             hf_token=hf_token,
             cache_dir=config.CACHE_DIR,
             model_name=config.DIARIZATION_MODEL,
             device=device,
         )
-        audio_cropper = make_audio_cropper(config.SAMPLE_RATE)
+        audio_cropper = get_audio_cropper(config.SAMPLE_RATE)
         store.set_system_message(
             f"ready (device: {device}, whisper: {config.WHISPER_MODEL})"
         )
@@ -109,4 +110,5 @@ def run() -> None:
         extensions=config.SUPPORTED_EXTENSIONS,
         interval_seconds=config.WATCH_INTERVAL_SECONDS,
         on_discover=on_discover,
+        should_pause=live_state.is_live_active,
     )
