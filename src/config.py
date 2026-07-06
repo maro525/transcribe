@@ -40,12 +40,14 @@ LIVE_WHISPER_THREADS = int(
 )
 
 # --- Live engine selection ---------------------------------------------------
-# auto: CUDA host -> whispercpp; non-CUDA + moonshine weights present ->
-#       moonshine; else whisper.cpp CPU. Force with whispercpp|moonshine.
-# moonshine is opt-in: it only becomes the default once its weights have been
-# fetched (scripts/fetch_moonshine_model.py), so existing CPU deployments keep
-# their behaviour unless they explicitly download the model.
-LIVE_ENGINE = os.environ.get("LIVE_ENGINE", "auto").strip().lower()
+# Default (unset/empty): moonshine (CPU-first). Fetch its weights with
+# scripts/fetch_moonshine_model.py before first use.
+# Set whispercpp to force whisper.cpp, or auto for a hardware-aware pick:
+#   auto = CUDA host -> whispercpp; non-CUDA + moonshine weights -> moonshine;
+#          else whisper.cpp CPU.
+# Note: GPU hosts must opt in with LIVE_ENGINE=auto (or whispercpp) now that
+# moonshine is the default.
+LIVE_ENGINE = (os.environ.get("LIVE_ENGINE") or "moonshine").strip().lower()
 LIVE_MOONSHINE_MODEL_DIR = Path(
     os.environ.get("LIVE_MOONSHINE_MODEL_DIR", BASE_DIR / "models" / "moonshine-tiny-ja")
 ).expanduser()

@@ -85,8 +85,8 @@ def test_auto_without_any_weights_raises():
     raise AssertionError("expected LiveEngineError")
 
 
-def test_empty_choice_defaults_to_auto():
-    assert _create("", cuda=True) is WHISPER_SENTINEL
+def test_empty_choice_defaults_to_moonshine():
+    assert _create("") is MOONSHINE_SENTINEL
 
 
 def test_invalid_choice_raises():
@@ -99,13 +99,14 @@ def test_invalid_choice_raises():
 
 
 def test_get_engine_is_singleton():
-    with _patched(cuda=True):
+    # Default LIVE_ENGINE is moonshine (CPU-first).
+    with _patched():
         saved = engine_module._engine
         engine_module._engine = None
         try:
             first = engine_module.get_engine()
             second = engine_module.get_engine()
-            assert first is WHISPER_SENTINEL
+            assert first is MOONSHINE_SENTINEL
             assert first is second
         finally:
             engine_module._engine = saved
