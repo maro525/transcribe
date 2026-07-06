@@ -179,7 +179,22 @@ def add_utterance(self, terms: list[Term] | list[str]) -> None
 3. ブラウザでの Canvas 実描画確認（ノードサイズ=頻度、decay 有効時の見え方）。
 
 ## Review
-<!-- team-review が記入 -->
+
+### 判定: PASS（2026-07-06、対象 commit 9f7c9ea）
+- 0 critical / 0 major / minor のみ。全 82 テスト PASS を実行再確認。wire format 不変を live.html 消費側コードと照合済み。承認済み決定 1A / 2B / 3A に整合。
+- レビュー体制: Claude (Quality/Logic) + OpenCode gpt-5.5 + Security pass + Simplify 手動分析（tier=M 相当）。Linear 投稿なし（ローカルタスク）。
+
+### 却下した誤検知（OpenCode 提起 → 精査で無効）
+- 「`LIVE_GRAPH_DECAY>1.0` で重み指数増加」→ 減衰分岐は `decay < 1.0` 条件のため >1.0 は no-op。増幅しない。
+- 「表示外候補が復帰しない」→ 表示落ち候補は pool に残り復帰する（`test_hidden_candidate_keeps_accumulating_and_revives` で担保）。pool eviction は別物のメモリガード。
+
+### 申し送り（minor、次タスク/PR 向け）
+1. [deploy/QA] janome 導入でサイドバー(2B)とグラフの語構成が変わる（意図的挙動変更）— PR 本文に明記。
+2. [次タスク] config 範囲検証: `LIVE_GRAPH_DECAY` の clamp/fail-fast（<0 でグラフ空化、>1.0 は silent no-op）、MIN_* の下限。
+3. [次タスク] `get_term_extractor()` の `except Exception` を ImportError 系に限定 or 警告ログ（破損 janome の silent 劣化防止）。
+4. [次タスク] 抽出語の NFKC 正規化（全角/半角英数の別ノード化防止）。janome 実品質検証と併せて。
+5. [nit] snapshot の nodes を sort 順で射影 / `morpheme_counts` を max 集計 / decay エッジ内包表記の重複乗算解消。任意。
+6. [note] `janome` はバージョン未固定（既存の未固定依存と整合）。`.claude/rules/security.md` はリポジトリに不在のため一般セキュリティパスで代替（脆弱性所見なし）。
 
 ## Deploy
 <!-- deploy が記入 -->
