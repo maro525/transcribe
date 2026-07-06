@@ -7,4 +7,6 @@ Modules:
 - streaming: transcription worker thread (partial scheduler, final priority)
 - session:   LiveSessionManager (WAV capture, finalize -> input/ handoff)
 - keywords:  lightweight keyword extraction from finalized text
+- terms:     pluggable term extraction (janome nouns/compounds, keywords fallback)
+- graph:     co-occurrence graph with cumulative-salience node selection
 """

@@ -69,9 +69,26 @@ LIVE_PARTIAL_WINDOW_SECONDS = float(
 )
 
 LIVE_KEYWORD_LIMIT = int(os.environ.get("LIVE_KEYWORD_LIMIT", "15"))
-# Word-network panel: per-final keyword extraction feeds a co-occurrence graph.
-LIVE_GRAPH_WORDS_PER_FINAL = int(os.environ.get("LIVE_GRAPH_WORDS_PER_FINAL", "6"))
+# Word-network panel: per-final term extraction feeds a candidate pool; the
+# displayed nodes are the session-cumulative salience top-N (see live/graph.py).
 LIVE_GRAPH_MAX_NODES = int(os.environ.get("LIVE_GRAPH_MAX_NODES", "40"))
+# Candidate terms taken from one finalized utterance. LIVE_GRAPH_WORDS_PER_FINAL
+# is honored as a deprecated alias for backward compatibility.
+LIVE_GRAPH_CANDIDATES_PER_FINAL = int(
+    os.environ.get(
+        "LIVE_GRAPH_CANDIDATES_PER_FINAL",
+        os.environ.get("LIVE_GRAPH_WORDS_PER_FINAL", "20"),
+    )
+)
+# Display cutoffs: minimum cumulative salience / minimum appearance count
+# (number of finals) a candidate needs before it becomes a visible node.
+LIVE_GRAPH_MIN_SALIENCE = float(os.environ.get("LIVE_GRAPH_MIN_SALIENCE", "0.0"))
+LIVE_GRAPH_MIN_FREQUENCY = int(os.environ.get("LIVE_GRAPH_MIN_FREQUENCY", "1"))
+# Exponential per-final decay applied to node salience and edge weights.
+# 1.0 disables decay (default); 0.98 is a reasonable starting point.
+LIVE_GRAPH_DECAY = float(os.environ.get("LIVE_GRAPH_DECAY", "1.0"))
+# Upper bound of the internal candidate pool (memory guard).
+LIVE_GRAPH_MAX_CANDIDATES = int(os.environ.get("LIVE_GRAPH_MAX_CANDIDATES", "200"))
 LIVE_FINAL_HISTORY_SIZE = 100
 LIVE_DISCONNECT_FINALIZE_SECONDS = int(
     os.environ.get("LIVE_DISCONNECT_FINALIZE_SECONDS", "60")

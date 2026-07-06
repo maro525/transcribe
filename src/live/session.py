@@ -29,8 +29,8 @@ import numpy as np
 from .. import config
 from . import state as live_state
 from .graph import CooccurrenceGraph
-from .keywords import extract_keywords
 from .streaming import TranscriptionWorker
+from .terms import extract_terms
 from .vad import SileroVad, UtteranceSegmenter
 
 Listener = Callable[[dict[str, Any]], None]
@@ -76,7 +76,13 @@ class LiveSessionManager:
         self._worker: TranscriptionWorker | None = None
         self._final_history: deque[dict[str, Any]] = deque(maxlen=history_size)
         self._final_texts: list[str] = []
-        self._graph = CooccurrenceGraph(graph_max_nodes)
+        self._graph = CooccurrenceGraph(
+            graph_max_nodes,
+            decay=config.LIVE_GRAPH_DECAY,
+            min_salience=config.LIVE_GRAPH_MIN_SALIENCE,
+            min_frequency=config.LIVE_GRAPH_MIN_FREQUENCY,
+            max_candidates=config.LIVE_GRAPH_MAX_CANDIDATES,
+        )
         self._draft_path: Path | None = None
         self._clients = 0
         self._disconnect_timer: threading.Timer | None = None
@@ -310,18 +316,18 @@ class LiveSessionManager:
             self._broadcast(item)
 
     def _keywords_message_locked(self) -> dict[str, Any]:
-        keywords = extract_keywords(
+        terms = extract_terms(
             "\n".join(self._final_texts), limit=config.LIVE_KEYWORD_LIMIT
         )
         return {
             "type": "keywords",
-            "items": [{"word": k.word, "score": k.score} for k in keywords],
+            "items": [{"word": t.word, "score": t.score} for t in terms],
         }
 
     def _graph_message_locked(self, text: str) -> dict[str, Any]:
-        """Per-final keyword co-occurrence -> full graph snapshot broadcast."""
-        keywords = extract_keywords(text, limit=config.LIVE_GRAPH_WORDS_PER_FINAL)
-        self._graph.add_utterance([k.word for k in keywords])
+        """Per-final term candidates -> full graph snapshot broadcast."""
+        terms = extract_terms(text, limit=config.LIVE_GRAPH_CANDIDATES_PER_FINAL)
+        self._graph.add_utterance(terms)
         return self._graph.snapshot()
 
     def _append_draft_locked(self, message: dict[str, Any]) -> None:
