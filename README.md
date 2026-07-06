@@ -100,10 +100,10 @@ source .venv/bin/activate
 
 ### 2. PyTorch（CUDA 版）を先にインストール
 
-素の `pip install` では CPU 版が入ることがあるため、GPU を使う場合は PyTorch を**先に** CUDA 版で入れます。`cuXXX` は `nvidia-smi` に表示される CUDA バージョンに合わせてください（例: CUDA 12.4 → `cu124`）。正確なコマンドは [pytorch.org](https://pytorch.org/get-started/locally/) を参照。
+素の `pip install` では CPU 版が入ることがあるため、GPU を使う場合は PyTorch を**先に** CUDA 版で入れます。バージョンは `requirements.txt` に合わせて **2.2.2** に固定してください（pyannote 3.1.1 と torchaudio の互換のため）。torch 2.2.2 は `cu121` ビルドを使います。
 
 ```bash
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
+pip install torch==2.2.2 torchaudio==2.2.2 --index-url https://download.pytorch.org/whl/cu121
 ```
 
 > GPU を使わない場合はこの手順を飛ばし、次の手順で入る CPU 版をそのまま使えます（処理は遅くなります）。

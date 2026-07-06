@@ -6,8 +6,14 @@ tqdm
 pyannote.audio==3.1.1
 python-dotenv==1.0.1
 onnxruntime==1.20.1
-torch
-torchaudio
+# Pinned to 2.2.x: pyannote.audio 3.1.1 calls torchaudio.set_audio_backend,
+# which is a harmless no-op in torchaudio 2.2 but was fully removed in later
+# releases (AttributeError on import -> batch diarization crash). 2.2.x also
+# satisfies transformers>=4.52 (Moonshine live engine). For GPU, install the
+# matching CUDA build instead:
+#   pip install torch==2.2.2 torchaudio==2.2.2 --index-url https://download.pytorch.org/whl/cu121
+torch==2.2.2
+torchaudio==2.2.2
 openai-whisper
 fastapi
 uvicorn[standard]
