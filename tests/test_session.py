@@ -204,6 +204,60 @@ def test_feed_pcm_with_odd_length_frame_does_not_crash():
         assert manager.status()["state"] == "idle"
 
 
+def test_final_broadcasts_graph_event():
+    with tempfile.TemporaryDirectory() as tmp:
+        manager = _manager(Path(tmp))
+        messages = []
+        manager.add_listener(messages.append)
+        manager.start()
+        manager.feed_pcm(_pcm_bytes(0.5, 2.0))
+        manager.feed_pcm(_pcm_bytes(0.0, 1.0))
+        manager.stop()
+
+        graphs = [m for m in messages if m["type"] == "graph"]
+        assert graphs, "a graph snapshot must be broadcast for each final"
+        snap = graphs[-1]
+        assert isinstance(snap["seq"], int) and snap["seq"] >= 1
+        assert isinstance(snap["nodes"], list)
+        assert isinstance(snap["edges"], list)
+        node_ids = {node["id"] for node in snap["nodes"]}
+        for edge in snap["edges"]:
+            assert edge["a"] in node_ids and edge["b"] in node_ids
+
+
+def test_replay_includes_graph_snapshot():
+    with tempfile.TemporaryDirectory() as tmp:
+        manager = _manager(Path(tmp))
+        manager.start()
+        # Seed the graph directly: replay wiring is what is under test here,
+        # independent of the Japanese keyword extraction output.
+        with manager._lock:
+            manager._graph.add_utterance(["alpha", "beta"])
+        replayed = []
+        manager.replay(replayed.append)
+        manager.stop()
+
+        graphs = [m for m in replayed if m["type"] == "graph"]
+        assert len(graphs) == 1
+        assert {node["id"] for node in graphs[0]["nodes"]} == {"alpha", "beta"}
+
+
+def test_start_resets_graph():
+    with tempfile.TemporaryDirectory() as tmp:
+        manager = _manager(Path(tmp))
+        manager.start()
+        with manager._lock:
+            manager._graph.add_utterance(["alpha", "beta"])
+        manager.stop()
+
+        manager.start()
+        snap = manager._graph.snapshot()
+        manager.stop()
+        assert snap["nodes"] == []
+        assert snap["edges"] == []
+        assert snap["seq"] == 0
+
+
 def test_pause_flag_follows_session_lifecycle():
     with tempfile.TemporaryDirectory() as tmp:
         manager = _manager(Path(tmp))

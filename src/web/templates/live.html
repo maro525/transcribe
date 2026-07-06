@@ -87,6 +87,41 @@
             border-bottom: 1px dashed rgba(127,127,127,0.2);
         }
         .keywords-pane .score { color: #999; font-size: 0.75rem; }
+        .graph-panel {
+            margin-top: 1rem;
+            border: 1px solid rgba(127,127,127,0.25);
+            border-radius: 6px;
+            padding: 0.8rem 1rem;
+        }
+        .graph-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        .graph-header h2 { font-size: 0.8rem; color: #777; margin: 0; text-transform: uppercase; }
+        .graph-header button {
+            font-size: 0.75rem;
+            padding: 0.2rem 0.7rem;
+            border-radius: 4px;
+            border: 1px solid rgba(127,127,127,0.4);
+            background: transparent;
+            color: inherit;
+            cursor: pointer;
+        }
+        .graph-body { position: relative; margin-top: 0.5rem; }
+        .graph-body.collapsed { display: none; }
+        #graph-canvas { width: 100%; height: 340px; display: block; }
+        .graph-empty {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #aaa;
+            font-size: 0.85rem;
+            pointer-events: none;
+        }
         .utt-final { margin: 0.3rem 0; }
         .utt-final .t { color: #999; font-size: 0.75rem; margin-right: 0.5rem; font-family: ui-monospace, monospace; }
         .utt-partial { margin: 0.3rem 0; color: #888; font-style: italic; }
@@ -155,6 +190,17 @@
         </div>
     </div>
 
+    <div class="graph-panel">
+        <div class="graph-header">
+            <h2>言葉のネットワーク</h2>
+            <button id="graph-toggle" type="button">折りたたむ</button>
+        </div>
+        <div id="graph-body" class="graph-body">
+            <canvas id="graph-canvas"></canvas>
+            <div id="graph-empty" class="graph-empty">発話が確定すると、キーワードのつながりがここに表示されます</div>
+        </div>
+    </div>
+
     <div id="banner" class="banner"></div>
     <div id="error-box" class="error-box"></div>
 
@@ -174,6 +220,11 @@
         const keywordsEl = document.getElementById("keywords");
         const bannerEl = document.getElementById("banner");
         const errorBox = document.getElementById("error-box");
+        const graphCanvas = document.getElementById("graph-canvas");
+        const graphCtx = graphCanvas.getContext("2d");
+        const graphEmpty = document.getElementById("graph-empty");
+        const graphToggle = document.getElementById("graph-toggle");
+        const graphBody = document.getElementById("graph-body");
 
         let ws = null;
         let wsReady = false;
@@ -259,6 +310,7 @@
             transcriptEl.replaceChildren(emptyMsg);
             emptyMsg.style.display = "";
             keywordsEl.replaceChildren();
+            clearGraph();
         }
         function showError(message) {
             errorBox.textContent = message;
@@ -349,6 +401,196 @@
             });
         }
 
+        // --- word network (force-directed canvas, no dependencies) ---------
+        const GRAPH_REPULSION = 3200;   // O(n^2) pair repulsion, fine for <=40 nodes
+        const GRAPH_SPRING = 0.02;
+        const GRAPH_SPRING_LENGTH = 90;
+        const GRAPH_CENTER_PULL = 0.012;
+        const GRAPH_DAMPING = 0.85;
+        const GRAPH_MIN_ENERGY = 0.05;  // rest threshold: stop the rAF loop below it
+        const GRAPH_MARGIN = 14;
+
+        const graphNodes = new Map(); // id -> {x, y, vx, vy, weight, lastSeen}
+        let graphEdges = [];
+        let graphSeq = 0;
+        let graphCollapsed = false;
+        let graphRafId = null;
+
+        function graphSize() {
+            return { w: graphCanvas.clientWidth || 600, h: graphCanvas.clientHeight || 340 };
+        }
+
+        function resizeGraphCanvas() {
+            const dpr = window.devicePixelRatio || 1;
+            const { w, h } = graphSize();
+            graphCanvas.width = Math.round(w * dpr);
+            graphCanvas.height = Math.round(h * dpr);
+            graphCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+
+        function anchorFor(id, edges) {
+            // Spawn new nodes near an already-placed neighbour for stability.
+            for (const edge of edges) {
+                const other = edge.a === id ? edge.b : (edge.b === id ? edge.a : null);
+                if (other && graphNodes.has(other)) return graphNodes.get(other);
+            }
+            return null;
+        }
+
+        function applyGraph(msg) {
+            graphSeq = msg.seq || 0;
+            const present = new Set();
+            const { w, h } = graphSize();
+            (msg.nodes || []).forEach((n) => {
+                present.add(n.id);
+                const existing = graphNodes.get(n.id);
+                if (existing) {
+                    existing.weight = n.weight;       // keep position & velocity
+                    existing.lastSeen = n.last_seen;
+                    return;
+                }
+                const anchor = anchorFor(n.id, msg.edges || []);
+                const baseX = anchor ? anchor.x : w / 2;
+                const baseY = anchor ? anchor.y : h / 2;
+                graphNodes.set(n.id, {
+                    x: baseX + (Math.random() - 0.5) * 60,
+                    y: baseY + (Math.random() - 0.5) * 60,
+                    vx: 0,
+                    vy: 0,
+                    weight: n.weight,
+                    lastSeen: n.last_seen,
+                });
+            });
+            for (const id of Array.from(graphNodes.keys())) {
+                if (!present.has(id)) graphNodes.delete(id); // server-side pruned
+            }
+            graphEdges = (msg.edges || []).filter(
+                (e) => graphNodes.has(e.a) && graphNodes.has(e.b)
+            );
+            graphEmpty.style.display = graphNodes.size ? "none" : "";
+            reheatGraph();
+        }
+
+        function clearGraph() {
+            graphNodes.clear();
+            graphEdges = [];
+            graphSeq = 0;
+            graphEmpty.style.display = "";
+            const { w, h } = graphSize();
+            graphCtx.clearRect(0, 0, w, h);
+        }
+
+        function simulateGraph() {
+            const { w, h } = graphSize();
+            const nodes = Array.from(graphNodes.values());
+            for (let i = 0; i < nodes.length; i++) {
+                for (let j = i + 1; j < nodes.length; j++) {
+                    const a = nodes[i];
+                    const b = nodes[j];
+                    let dx = a.x - b.x;
+                    let dy = a.y - b.y;
+                    let d2 = dx * dx + dy * dy;
+                    if (d2 < 1) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 1; }
+                    const dist = Math.sqrt(d2);
+                    const force = GRAPH_REPULSION / d2;
+                    const fx = (dx / dist) * force;
+                    const fy = (dy / dist) * force;
+                    a.vx += fx; a.vy += fy;
+                    b.vx -= fx; b.vy -= fy;
+                }
+            }
+            graphEdges.forEach((edge) => {
+                const a = graphNodes.get(edge.a);
+                const b = graphNodes.get(edge.b);
+                const dx = b.x - a.x;
+                const dy = b.y - a.y;
+                const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                const pull = (dist - GRAPH_SPRING_LENGTH) * GRAPH_SPRING * Math.min(edge.weight, 4);
+                const fx = (dx / dist) * pull;
+                const fy = (dy / dist) * pull;
+                a.vx += fx; a.vy += fy;
+                b.vx -= fx; b.vy -= fy;
+            });
+            let energy = 0;
+            nodes.forEach((n) => {
+                n.vx += (w / 2 - n.x) * GRAPH_CENTER_PULL;
+                n.vy += (h / 2 - n.y) * GRAPH_CENTER_PULL;
+                n.vx *= GRAPH_DAMPING;
+                n.vy *= GRAPH_DAMPING;
+                n.x = Math.max(GRAPH_MARGIN, Math.min(w - GRAPH_MARGIN, n.x + n.vx));
+                n.y = Math.max(GRAPH_MARGIN, Math.min(h - GRAPH_MARGIN, n.y + n.vy));
+                energy += n.vx * n.vx + n.vy * n.vy;
+            });
+            return nodes.length ? energy / nodes.length : 0;
+        }
+
+        function drawGraph() {
+            const { w, h } = graphSize();
+            const inkColor = getComputedStyle(document.body).color; // light/dark aware
+            graphCtx.clearRect(0, 0, w, h);
+            graphCtx.strokeStyle = inkColor;
+            graphEdges.forEach((edge) => {
+                const a = graphNodes.get(edge.a);
+                const b = graphNodes.get(edge.b);
+                graphCtx.globalAlpha = Math.min(0.12 + edge.weight * 0.08, 0.55);
+                graphCtx.lineWidth = Math.min(0.5 + edge.weight * 0.5, 3);
+                graphCtx.beginPath();
+                graphCtx.moveTo(a.x, a.y);
+                graphCtx.lineTo(b.x, b.y);
+                graphCtx.stroke();
+            });
+            graphCtx.textAlign = "center";
+            graphCtx.textBaseline = "bottom";
+            graphNodes.forEach((n, id) => {
+                const age = Math.max(0, graphSeq - n.lastSeen);
+                const fade = Math.max(0.35, 1 - age * 0.06); // older words dim out
+                const radius = Math.min(4 + n.weight * 2, 16);
+                graphCtx.globalAlpha = fade;
+                graphCtx.fillStyle = "#1a7f37";
+                graphCtx.beginPath();
+                graphCtx.arc(n.x, n.y, radius, 0, Math.PI * 2);
+                graphCtx.fill();
+                graphCtx.fillStyle = inkColor;
+                graphCtx.font = (n.weight > 2 ? "600 " : "") + "12px sans-serif";
+                graphCtx.fillText(id, n.x, n.y - radius - 3);
+            });
+            graphCtx.globalAlpha = 1;
+        }
+
+        function graphFrame() {
+            graphRafId = null;
+            if (graphCollapsed || document.hidden) return; // power saving: halt
+            const energy = simulateGraph();
+            drawGraph();
+            if (energy > GRAPH_MIN_ENERGY) {
+                graphRafId = requestAnimationFrame(graphFrame);
+            }
+        }
+
+        function reheatGraph() {
+            if (graphCollapsed || document.hidden || graphRafId !== null) return;
+            graphRafId = requestAnimationFrame(graphFrame);
+        }
+
+        graphToggle.addEventListener("click", () => {
+            graphCollapsed = !graphCollapsed;
+            graphBody.classList.toggle("collapsed", graphCollapsed);
+            graphToggle.textContent = graphCollapsed ? "表示" : "折りたたむ";
+            if (!graphCollapsed) {
+                resizeGraphCanvas(); // canvas had display:none -> re-measure
+                reheatGraph();
+            }
+        });
+        document.addEventListener("visibilitychange", () => {
+            if (!document.hidden) reheatGraph();
+        });
+        window.addEventListener("resize", () => {
+            if (graphCollapsed) return;
+            resizeGraphCanvas();
+            reheatGraph();
+        });
+        resizeGraphCanvas();
+
         function applyFinalized(msg) {
             bannerEl.replaceChildren();
             bannerEl.append("会議を終了しました。録音をバッチ処理に引き継ぎました: ");
@@ -389,6 +631,7 @@
                 else if (msg.type === "partial") applyPartial(msg);
                 else if (msg.type === "final") applyFinal(msg);
                 else if (msg.type === "keywords") applyKeywords(msg);
+                else if (msg.type === "graph") applyGraph(msg);
                 else if (msg.type === "finalized") applyFinalized(msg);
                 else if (msg.type === "error") showError(msg.message || "error");
             });

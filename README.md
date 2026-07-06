@@ -171,6 +171,8 @@ python main.py
 | `LIVE_PARTIAL_INTERVAL_SECONDS` | `1.0` | 暫定（partial）推論の間隔。CPU 環境は 2〜3 秒推奨 |
 | `LIVE_PARTIAL_WINDOW_SECONDS` | `15` | partial 再推論の対象ウィンドウ |
 | `LIVE_KEYWORD_LIMIT` | `15` | キーワード表示数 |
+| `LIVE_GRAPH_WORDS_PER_FINAL` | `6` | 言葉のネットワーク: 確定発話 1 件から抽出する語数の上限 |
+| `LIVE_GRAPH_MAX_NODES` | `40` | 言葉のネットワーク: グラフのノード数上限（超過時は低重み・古い語から間引き） |
 | `LIVE_DISCONNECT_FINALIZE_SECONDS` | `60` | 切断後に自動で会議終了するまでの猶予 |
 
 ## Web ダッシュボード
@@ -183,13 +185,15 @@ python main.py
 | `GET /jobs/{filename}/transcript` | 指定ジョブの書き起こしを表示 |
 | `GET /live` | リアルタイムモードの画面 |
 | `GET /live/status` | ライブセッションの状態（JSON） |
-| `WS /live/ws` | ライブ音声の送信と partial/final/keywords 配信 |
+| `WS /live/ws` | ライブ音声の送信と partial/final/keywords/graph 配信 |
 
 SSE が利用できない環境では `/jobs` ポーリングへ自動フォールバックします。
 
 ## リアルタイムモード
 
 会議中のライブ文字起こし機能です。バッチモードとは独立したエンジン（whisper.cpp + large-v3-turbo + Silero VAD）を使い、既存のバッチ処理（openai-whisper + pyannote）には変更を加えていません。
+
+画面下部の「言葉のネットワーク」パネルには、発話が確定するたびに重要キーワードがノードとして追加され、同一発話内で共起した語同士がエッジで結ばれる力学グラフがリアルタイムに描画されます（vanilla JS + Canvas、外部ライブラリ不使用）。ノードの大きさは出現した発話数、エッジの太さは共起回数を表し、しばらく現れていない語は徐々に薄く表示されます。ノード数は `LIVE_GRAPH_MAX_NODES`（既定 40）で制限され、超過時は重みの小さい・古い語から間引かれます。パネルは折りたたみ可能で、折りたたみ中・タブ非表示中・レイアウト収束後はシミュレーションを停止して CPU を消費しません。
 
 ### セットアップ
 

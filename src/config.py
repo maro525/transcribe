@@ -69,6 +69,9 @@ LIVE_PARTIAL_WINDOW_SECONDS = float(
 )
 
 LIVE_KEYWORD_LIMIT = int(os.environ.get("LIVE_KEYWORD_LIMIT", "15"))
+# Word-network panel: per-final keyword extraction feeds a co-occurrence graph.
+LIVE_GRAPH_WORDS_PER_FINAL = int(os.environ.get("LIVE_GRAPH_WORDS_PER_FINAL", "6"))
+LIVE_GRAPH_MAX_NODES = int(os.environ.get("LIVE_GRAPH_MAX_NODES", "40"))
 LIVE_FINAL_HISTORY_SIZE = 100
 LIVE_DISCONNECT_FINALIZE_SECONDS = int(
     os.environ.get("LIVE_DISCONNECT_FINALIZE_SECONDS", "60")

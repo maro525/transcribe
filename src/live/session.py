@@ -6,7 +6,7 @@ a time (a second `start` is rejected).
 Responsibilities:
 - receive 16 kHz/mono/Int16 PCM, append it to a WAV in tmp_audio/,
   and feed it through VAD -> transcription worker;
-- broadcast protocol messages (status/partial/final/keywords/finalized/error)
+- broadcast protocol messages (status/partial/final/keywords/graph/finalized/error)
   to registered listeners (the WebSocket handlers);
 - keep a ring buffer of recent finals for reconnect recovery;
 - append finals to a live-draft text file in output/;
@@ -28,6 +28,7 @@ import numpy as np
 
 from .. import config
 from . import state as live_state
+from .graph import CooccurrenceGraph
 from .keywords import extract_keywords
 from .streaming import TranscriptionWorker
 from .vad import SileroVad, UtteranceSegmenter
@@ -52,6 +53,7 @@ class LiveSessionManager:
         engine_provider: Callable[[], Any] | None = None,
         vad_factory: Callable[[], Any] | None = None,
         history_size: int = config.LIVE_FINAL_HISTORY_SIZE,
+        graph_max_nodes: int = config.LIVE_GRAPH_MAX_NODES,
         disconnect_finalize_seconds: float = config.LIVE_DISCONNECT_FINALIZE_SECONDS,
     ) -> None:
         self._source_dir = source_dir or config.SOURCE_DIR
@@ -74,6 +76,7 @@ class LiveSessionManager:
         self._worker: TranscriptionWorker | None = None
         self._final_history: deque[dict[str, Any]] = deque(maxlen=history_size)
         self._final_texts: list[str] = []
+        self._graph = CooccurrenceGraph(graph_max_nodes)
         self._draft_path: Path | None = None
         self._clients = 0
         self._disconnect_timer: threading.Timer | None = None
@@ -130,6 +133,7 @@ class LiveSessionManager:
             self._worker = worker
             self._final_history.clear()
             self._final_texts = []
+            self._graph.reset()
             self._draft_path = None
 
             live_state.set_live_active()
@@ -216,6 +220,9 @@ class LiveSessionManager:
             messages = [self.status(), *self._final_history]
             if self._final_texts:
                 messages.append(self._keywords_message_locked())
+            graph_snapshot = self._graph.snapshot()
+            if graph_snapshot["nodes"]:
+                messages.append(graph_snapshot)
         for message in messages:
             send(message)
 
@@ -297,6 +304,7 @@ class LiveSessionManager:
                 self._final_texts.append(message["text"])
                 self._append_draft_locked(message)
                 extra.append(self._keywords_message_locked())
+                extra.append(self._graph_message_locked(message["text"]))
         self._broadcast(message)
         for item in extra:
             self._broadcast(item)
@@ -309,6 +317,12 @@ class LiveSessionManager:
             "type": "keywords",
             "items": [{"word": k.word, "score": k.score} for k in keywords],
         }
+
+    def _graph_message_locked(self, text: str) -> dict[str, Any]:
+        """Per-final keyword co-occurrence -> full graph snapshot broadcast."""
+        keywords = extract_keywords(text, limit=config.LIVE_GRAPH_WORDS_PER_FINAL)
+        self._graph.add_utterance([k.word for k in keywords])
+        return self._graph.snapshot()
 
     def _append_draft_locked(self, message: dict[str, Any]) -> None:
         if self._draft_path is None:
