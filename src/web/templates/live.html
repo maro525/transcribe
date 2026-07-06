@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>リアルタイムモード - Transcribe</title>
+    <title>ライブ文字起こし - Transcribe</title>
     <style>
         :root { color-scheme: light dark; }
         body {
@@ -61,6 +61,9 @@
         .state-finalizing { background: #fff3cd; color: #856404; }
         .hint { font-size: 0.75rem; color: #999; margin: 0.25rem 0 1rem; }
         .layout { display: flex; gap: 1rem; align-items: flex-start; }
+        .topbar { font-size: 0.85rem; margin: 0 0 0.75rem; }
+        .timeline-col { flex: 1; min-width: 0; }
+        .col-title { font-size: 0.8rem; color: #777; margin: 0 0 0.5rem; text-transform: uppercase; }
         .transcript-pane {
             flex: 1;
             min-height: 300px;
@@ -111,7 +114,7 @@
         }
         .graph-body { position: relative; margin-top: 0.5rem; }
         .graph-body.collapsed { display: none; }
-        #graph-canvas { width: 100%; height: 340px; display: block; }
+        #graph-canvas { width: 100%; height: 380px; display: block; }
         .graph-empty {
             position: absolute;
             inset: 0;
@@ -153,11 +156,7 @@
     </style>
 </head>
 <body>
-    <h1>リアルタイムモード</h1>
-    <p class="subtitle">
-        会議中のライブ文字起こしと重要キーワード表示。終了後は自動でバッチ処理（話者分離つき）に引き継がれます。
-        <a href="/">← バッチモードへ戻る</a>
-    </p>
+    <p class="topbar"><a href="/">← バッチモードへ戻る</a></p>
 
     <div class="controls">
         <label>
@@ -180,16 +179,6 @@
         <strong>「音声を共有」にチェック</strong>を入れてください。
     </p>
 
-    <div class="layout">
-        <div id="transcript" class="transcript-pane">
-            <div class="empty-transcript" id="empty-msg">録音を開始すると、ここに文字起こしが表示されます</div>
-        </div>
-        <div class="keywords-pane">
-            <h2>キーワード</h2>
-            <ul id="keywords"><li style="border:none;color:#aaa;">—</li></ul>
-        </div>
-    </div>
-
     <div class="graph-panel">
         <div class="graph-header">
             <h2>言葉のネットワーク</h2>
@@ -198,6 +187,19 @@
         <div id="graph-body" class="graph-body">
             <canvas id="graph-canvas"></canvas>
             <div id="graph-empty" class="graph-empty">発話が確定すると、キーワードのつながりがここに表示されます</div>
+        </div>
+    </div>
+
+    <div class="layout">
+        <div class="keywords-pane">
+            <h2>キーワード</h2>
+            <ul id="keywords"><li style="border:none;color:#aaa;">—</li></ul>
+        </div>
+        <div class="timeline-col">
+            <h2 class="col-title">タイムライン</h2>
+            <div id="transcript" class="transcript-pane">
+                <div class="empty-transcript" id="empty-msg">録音を開始すると、ここに文字起こしが表示されます</div>
+            </div>
         </div>
     </div>
 
