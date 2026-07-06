@@ -84,6 +84,7 @@ def create_app(lifespan: LifespanFactory | None = None) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request):
         return templates.TemplateResponse(
+            request,
             "index.html",
             {
                 "request": request,
@@ -96,6 +97,7 @@ def create_app(lifespan: LifespanFactory | None = None) -> FastAPI:
     @app.get("/jobs", response_class=HTMLResponse)
     def jobs(request: Request):
         return templates.TemplateResponse(
+            request,
             "_jobs.html",
             {
                 "request": request,
@@ -112,6 +114,7 @@ def create_app(lifespan: LifespanFactory | None = None) -> FastAPI:
         if job and job.output_path and Path(job.output_path).exists():
             text = Path(job.output_path).read_text(encoding="utf-8")
         return templates.TemplateResponse(
+            request,
             "_transcript.html",
             {"request": request, "job": job, "text": text},
         )
@@ -130,7 +133,7 @@ def create_app(lifespan: LifespanFactory | None = None) -> FastAPI:
 
     @app.get("/live", response_class=HTMLResponse)
     def live_page(request: Request):
-        return templates.TemplateResponse("live.html", {"request": request})
+        return templates.TemplateResponse(request, "live.html", {"request": request})
 
     @app.get("/live/status")
     def live_status():
