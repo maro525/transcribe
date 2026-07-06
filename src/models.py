@@ -39,6 +39,13 @@ def load_diarization_pipeline(
         use_auth_token=hf_token,
         cache_dir=str(cache_dir),
     )
+    if pipeline is None:
+        raise RuntimeError(
+            f"Could not load {model_name}. Check that HF_TOKEN is a valid "
+            "HuggingFace token and that you accepted the gated-model conditions "
+            "at https://hf.co/pyannote/speaker-diarization-3.1 and "
+            "https://hf.co/pyannote/segmentation-3.0 (same account as the token)."
+        )
     pipeline.to(torch.device(device or get_device()))
     return pipeline
 
