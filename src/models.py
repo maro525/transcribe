@@ -7,13 +7,14 @@ whisper.cpp model is intentionally NOT managed here — it lives in
 ``src/live/engine.py`` (see task NSKETCH-819, decision #7 revised).
 """
 
+from __future__ import annotations
+
 import os
 import threading
 from pathlib import Path
 
 import torch
 import whisper
-from pyannote.audio import Audio, Pipeline
 
 
 def get_device() -> str:
@@ -30,6 +31,8 @@ def load_diarization_pipeline(
     model_name: str = "pyannote/speaker-diarization-3.1",
     device: str | None = None,
 ):
+    from pyannote.audio import Pipeline
+
     os.environ["XDG_CACHE_HOME"] = str(cache_dir)
     pipeline = Pipeline.from_pretrained(
         model_name,
@@ -41,6 +44,8 @@ def load_diarization_pipeline(
 
 
 def make_audio_cropper(sample_rate: int = 16000) -> Audio:
+    from pyannote.audio import Audio
+
     return Audio(sample_rate=sample_rate, mono=True)
 
 
