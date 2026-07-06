@@ -19,3 +19,7 @@ silero-vad
 # Moonshine CPU live engine (LIVE_ENGINE=moonshine) — reuses the existing
 # torch install, CUDA not required
 transformers>=4.52,<5
+# Japanese noun/compound-noun extraction for the live "word network" panel
+# (src/live/terms.py). Optional: when absent, live mode falls back to the
+# lightweight extractor in src/live/keywords.py with no error.
+janome

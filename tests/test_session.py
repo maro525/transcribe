@@ -258,6 +258,29 @@ def test_start_resets_graph():
         assert snap["seq"] == 0
 
 
+def test_keywords_message_shape_is_preserved():
+    """2B regression guard: the sidebar keywords path now goes through
+    terms.extract_terms, but the WS message shape {"word","score"} must
+    stay identical for live.html."""
+    with tempfile.TemporaryDirectory() as tmp:
+        manager = _manager(Path(tmp))
+        messages = []
+        manager.add_listener(messages.append)
+        manager.start()
+        manager.feed_pcm(_pcm_bytes(0.5, 2.0))
+        manager.feed_pcm(_pcm_bytes(0.0, 1.0))
+        manager.stop()
+
+        keyword_messages = [m for m in messages if m["type"] == "keywords"]
+        assert keyword_messages, "a keywords message must follow each final"
+        for message in keyword_messages:
+            assert isinstance(message["items"], list)
+            for item in message["items"]:
+                assert set(item) == {"word", "score"}
+                assert isinstance(item["word"], str)
+                assert isinstance(item["score"], (int, float))
+
+
 def test_pause_flag_follows_session_lifecycle():
     with tempfile.TemporaryDirectory() as tmp:
         manager = _manager(Path(tmp))

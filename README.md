@@ -52,7 +52,9 @@ FastAPI Web ダッシュボード (ジョブ状態をリアルタイム表示)
 │   │   ├── vad.py              # Silero VAD + 発話区間検出の状態機械
 │   │   ├── streaming.py        # 転写ワーカー（partial スケジューラ / final 優先）
 │   │   ├── session.py          # LiveSessionManager（WAV 保存 → input/ 引き継ぎ）
-│   │   └── keywords.py         # キーワード抽出
+│   │   ├── keywords.py         # キーワード抽出（janome 不在時のフォールバック）
+│   │   ├── terms.py            # 用語抽出（janome 名詞・複合名詞、不在時は keywords へ委譲）
+│   │   └── graph.py            # 共起グラフ（累積サリエンスによるノード選抜）
 │   └── web/
 │       ├── app.py              # FastAPI ルート（/, /jobs, /events, /live, WS）
 │       └── templates/          # index.html / live.html / partials
@@ -171,8 +173,12 @@ python main.py
 | `LIVE_PARTIAL_INTERVAL_SECONDS` | `1.0` | 暫定（partial）推論の間隔。CPU 環境は 2〜3 秒推奨 |
 | `LIVE_PARTIAL_WINDOW_SECONDS` | `15` | partial 再推論の対象ウィンドウ |
 | `LIVE_KEYWORD_LIMIT` | `15` | キーワード表示数 |
-| `LIVE_GRAPH_WORDS_PER_FINAL` | `6` | 言葉のネットワーク: 確定発話 1 件から抽出する語数の上限 |
-| `LIVE_GRAPH_MAX_NODES` | `40` | 言葉のネットワーク: グラフのノード数上限（超過時は低重み・古い語から間引き） |
+| `LIVE_GRAPH_CANDIDATES_PER_FINAL` | `20` | 言葉のネットワーク: 確定発話 1 件から取り込む候補語数（旧 `LIVE_GRAPH_WORDS_PER_FINAL` も別名として有効） |
+| `LIVE_GRAPH_MAX_NODES` | `40` | 言葉のネットワーク: 表示ノード数の上限（累積サリエンス上位を選抜） |
+| `LIVE_GRAPH_MIN_SALIENCE` | `0.0` | 言葉のネットワーク: 表示に必要な累積サリエンスの下限 |
+| `LIVE_GRAPH_MIN_FREQUENCY` | `1` | 言葉のネットワーク: 表示に必要な出現発話数の下限 |
+| `LIVE_GRAPH_DECAY` | `1.0` | 言葉のネットワーク: 確定発話ごとの指数減衰（1.0 で無効、0.98 目安） |
+| `LIVE_GRAPH_MAX_CANDIDATES` | `200` | 言葉のネットワーク: 内部候補プールの上限（メモリ抑制） |
 | `LIVE_DISCONNECT_FINALIZE_SECONDS` | `60` | 切断後に自動で会議終了するまでの猶予 |
 
 ## Web ダッシュボード
@@ -193,7 +199,9 @@ SSE が利用できない環境では `/jobs` ポーリングへ自動フォー�
 
 会議中のライブ文字起こし機能です。バッチモードとは独立したエンジン（whisper.cpp + large-v3-turbo + Silero VAD）を使い、既存のバッチ処理（openai-whisper + pyannote）には変更を加えていません。
 
-画面下部の「言葉のネットワーク」パネルには、発話が確定するたびに重要キーワードがノードとして追加され、同一発話内で共起した語同士がエッジで結ばれる力学グラフがリアルタイムに描画されます（vanilla JS + Canvas、外部ライブラリ不使用）。ノードの大きさは出現した発話数、エッジの太さは共起回数を表し、しばらく現れていない語は徐々に薄く表示されます。ノード数は `LIVE_GRAPH_MAX_NODES`（既定 40）で制限され、超過時は重みの小さい・古い語から間引かれます。パネルは折りたたみ可能で、折りたたみ中・タブ非表示中・レイアウト収束後はシミュレーションを停止して CPU を消費しません。
+画面下部の「言葉のネットワーク」パネルには、発話が確定するたびに用語が候補としてセッション全体に累積され、累積サリエンス（抽出スコアの合計）上位 `LIVE_GRAPH_MAX_NODES`（既定 40）件がノードとして描画されます。同一発話内で共起した語同士はエッジで結ばれます（vanilla JS + Canvas、外部ライブラリ不使用）。表示から外れた語も候補として累積を続け、後で再登場すれば復帰します。`LIVE_GRAPH_DECAY` を 1.0 未満にすると古い話題が徐々に減衰します。ノードの大きさは出現した発話数、エッジの太さは共起回数を表し、しばらく現れていない語は徐々に薄く表示されます。パネルは折りたたみ可能で、折りたたみ中・タブ非表示中・レイアウト収束後はシミュレーションを停止して CPU を消費しません。
+
+用語抽出は janome（純 Python の形態素解析器）による名詞・複合名詞ベースの抽出（`src/live/terms.py`）を使います。janome が未インストールの環境では従来の軽量抽出（`src/live/keywords.py`）へ自動フォールバックし、エラーなく動作します。将来課題として、抽出スコアの TF-IDF 化を検討しています。
 
 ### セットアップ
 
