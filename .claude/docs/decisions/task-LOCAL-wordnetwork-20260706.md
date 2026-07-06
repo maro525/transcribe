@@ -4,7 +4,7 @@
 - linear_id: LOCAL-wordnetwork-20260706（ローカルタスク。Linear 連携なし）
 - tier: M
 - created: 2026-07-06
-- status: implemented (review 待ち)
+- status: reviewed (PASS — deploy 待ち)
 - base_branch: feature/moonshine-live-engine
 - branch: feature/live-word-network（実装時に分岐）
 - deploy: PR 作成まで（Linear 投稿なし）
@@ -129,6 +129,8 @@ class CooccurrenceGraph:
   test_live_graph.py / test_session.py / README.md）で実装完了。全テスト PASS（45 件、keywords 除く）。
   session.py には `graph_max_nodes` コンストラクタ引数を追加（既存 `history_size` と同パターン、テスト注入用）。
   replay は空グラフを送らない仕様とした。Linear 連携なし（ローカルタスク）。
+- 2026-07-06 [team-review] POST: 判定 PASS（0 critical / 0 major、minor 4 件は申し送り）。
+  4 レビュアー実施、テスト 55/55 PASS、keywords.py 無変更を diff で確認。Linear 投稿なし（ローカルタスク）。
 
 ## Implementation Notes
 
@@ -174,7 +176,27 @@ class CooccurrenceGraph:
 - replay はノード 0 個のとき graph を送らない（新規接続時の無意味なメッセージ抑制）。
 
 ## Review
-<!-- team-review が記入 -->
+
+### 判定: PASS（2026-07-06、対象コミット 6883053、diff 33f5c40..6883053）
+- 0 critical / 0 major。指摘は全て minor（申し送り）。
+- レビュアー: Claude / OpenCode (gpt-5.5) / Security / Simplify。
+- 制約遵守確認: `git diff --name-only` で `keywords.py` / `test_keywords.py` が変更なしを確認（両ファイルは読み取りもせず遵守）。
+
+### 主な確認事項
+- graph.py: dedup・canonical edge key・空発話早期 return・剪定の孤立エッジ除去・`max(1, max_nodes)` 防御まで正しい。
+- session.py: broadcast 順序（final → keywords → graph）、snapshot の新規 dict 生成によりロック外 broadcast でもエイリアス競合なし。
+- Security: XSS 経路なし（キーワードは Canvas `fillText` のみ、DOM 挿入なし）。新規エンドポイントなし・認証変更なし。
+- テスト: 全 55/55 PASS（py_compile OK、test_live_graph 9、test_session 12、既存無回帰 34。keywords スイートは権限 deny で除外）。
+
+### minor 申し送り（次タスク推奨）
+1. 空キーワード final でも graph broadcast → フロントが不要な reheat（`msg.seq === graphSeq` でスキップ可）。自己収束するため minor。
+2. 毎フレーム `getComputedStyle` → 開始時/テーマ変更時にキャッシュ可。
+3. graph.py docstring: ノード重みは「現在保持中ノードに限る（剪定で履歴は失われる）」の補足を推奨。
+4. graph 用 `extract_keywords` のロック外 hoist は任意最適化（現状は既存パターンと整合）。
+
+### 未検証（環境制約 — 引き継ぎ）
+- ブラウザ実描画（force layout 品質・折りたたみ・ライト/ダーク・DPR・長いラベルのはみ出し）。
+- 実音声でのキーワード品質、Moonshine E2E。
 
 ## Deploy
 <!-- deploy が記入。Linear 連携なし・PR 作成まで -->
