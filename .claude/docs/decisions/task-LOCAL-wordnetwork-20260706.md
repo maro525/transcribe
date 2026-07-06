@@ -4,7 +4,7 @@
 - linear_id: LOCAL-wordnetwork-20260706（ローカルタスク。Linear 連携なし）
 - tier: M
 - created: 2026-07-06
-- status: reviewed (PASS — deploy 待ち)
+- status: done
 - base_branch: feature/moonshine-live-engine
 - branch: feature/live-word-network（実装時に分岐）
 - deploy: PR 作成まで（Linear 投稿なし）
@@ -199,4 +199,9 @@ class CooccurrenceGraph:
 - 実音声でのキーワード品質、Moonshine E2E。
 
 ## Deploy
-<!-- deploy が記入。Linear 連携なし・PR 作成まで -->
+
+- 2026-07-06: `feature/live-word-network` を origin へ push（実装コミット 6883053 + docs コミット 53d9e63）。
+- PR: https://github.com/hidemaro-nsketch/transcribe/pull/3（base: `feature/moonshine-live-engine`）。
+- PR 本文に実施済み検証（テスト 55/55 PASS・py_compile・既存無回帰・レビュー PASS）と
+  未実施検証（ブラウザ実描画・実音声キーワード品質・Moonshine E2E）、minor 申し送り 4 件を明記。
+- Linear 連携なし（ローカルタスク — issue 作成・ステータス遷移・コメント投稿すべてスキップ）。
