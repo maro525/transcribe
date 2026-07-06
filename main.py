@@ -19,7 +19,15 @@ def main() -> None:
     worker.bootstrap_history()
 
     app = create_app(lifespan=lifespan)
-    uvicorn.run(app, host=config.WEB_HOST, port=config.WEB_PORT)
+    # timeout_graceful_shutdown: force-close lingering SSE/WebSocket connections
+    # a few seconds after Ctrl+C instead of waiting for them indefinitely, so the
+    # server actually stops even with a browser tab still open.
+    uvicorn.run(
+        app,
+        host=config.WEB_HOST,
+        port=config.WEB_PORT,
+        timeout_graceful_shutdown=5,
+    )
 
 
 if __name__ == "__main__":
