@@ -86,17 +86,33 @@ FastAPI Web ダッシュボード (ジョブ状態をリアルタイム表示)
 
 ## セットアップ
 
-### 1. 仮想環境（Python 3.12）
+### 1. 仮想環境（venv）を作る（Python 3.12）
+
+仮想環境（venv）は、このプロジェクト専用に Python パッケージを隔離する仕組みです。プロジェクト直下に `.venv` を作り、「有効化」してから以降の手順を実行します。
 
 ```bash
-# Windows
+# Windows（PowerShell）
 py -3.12 -m venv .venv
-.\.venv\Scripts\activate
+.\.venv\Scripts\Activate.ps1
 
 # Linux / WSL2 / macOS
 python3.12 -m venv .venv
 source .venv/bin/activate
 ```
+
+- 有効化されるとプロンプト先頭に `(.venv)` が付きます。以降の `pip` / `python` はこの環境だけに効きます。
+- **新しいターミナルを開くたびに、有効化（上の activate 行）を再実行**してください（作成は最初の1回だけ）。
+- 正しい Python か確認:
+  ```bash
+  python -c "import sys, sysconfig; print(sys.version); print(sysconfig.get_platform())"
+  ```
+  → `3.12.x` で、x86_64 環境なら `win-amd64`（Linux は `linux-x86_64`）が出ればOK。
+
+> **Windows on ARM の場合**: `py -3.12` が ARM64 版 Python を拾うことがあります。その場合は **x86-64（AMD64）版 Python 3.12** の実体パスを指定して作成してください（例）:
+> ```powershell
+> C:\Users\<ユーザー名>\AppData\Local\Programs\Python\Python312\python.exe -m venv .venv
+> ```
+> 上の確認コマンドで `sysconfig.get_platform()` が `win-amd64` になっていれば正解です（理由は「動作環境」参照）。
 
 ### 2. PyTorch（CUDA 版）を先にインストール
 
@@ -204,6 +220,8 @@ SSE が利用できない環境では `/jobs` ポーリングへ自動フォー�
 用語抽出は janome（純 Python の形態素解析器）による名詞・複合名詞ベースの抽出（`src/live/terms.py`）を使います。janome が未インストールの環境では従来の軽量抽出（`src/live/keywords.py`）へ自動フォールバックし、エラーなく動作します。将来課題として、抽出スコアの TF-IDF 化を検討しています。
 
 ### セットアップ
+
+上の「セットアップ」で作成した **venv を有効化した状態**で実行してください（新しいターミナルなら `.\.venv\Scripts\Activate.ps1` などで再有効化）。
 
 ```bash
 # 1. 依存の導入（pywhispercpp / silero-vad を含む）
