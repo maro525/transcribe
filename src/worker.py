@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from . import config
+from .artifacts import save_artifacts
 from .auth import load_hf_token
 from .formatter import save_transcript
 from .live import state as live_state
@@ -88,6 +89,14 @@ def run() -> None:
                 on_segment=on_segment,
             )
             output_path = save_transcript(segments, file_path.name, config.OUTPUT_DIR)
+            try:
+                save_artifacts(
+                    config.OUTPUT_DIR,
+                    file_path.name,
+                    [segment.text for segment in segments],
+                )
+            except Exception as error:  # best-effort; never fail the job
+                print(f"Artifact generation failed for {file_path.name}: {error}")
             move_to_done(file_path, config.DONE_DIR)
             store.update(
                 file_path.name,

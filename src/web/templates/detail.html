@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ job.filename }} — Transcribe Dashboard</title>
+    <style>
+        :root { color-scheme: light dark; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+            max-width: 1000px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+            line-height: 1.5;
+        }
+        h1 { font-size: 1.2rem; margin: 0.5rem 0 0.25rem; word-break: break-all; }
+        h2 { font-size: 0.8rem; color: #777; margin: 0 0 0.5rem; text-transform: uppercase; letter-spacing: 0.04em; }
+        .topbar { margin: 0; font-size: 0.9rem; }
+        a { color: #0366d6; text-decoration: none; cursor: pointer; }
+        a:hover { text-decoration: underline; }
+        .meta { color: #888; font-size: 0.85rem; margin: 0 0 1.5rem; }
+        .state {
+            display: inline-block;
+            padding: 0.15rem 0.5rem;
+            border-radius: 3px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .state-done { background: #d4edda; color: #155724; }
+        .panel {
+            border: 1px solid rgba(127,127,127,0.25);
+            border-radius: 6px;
+            padding: 0.8rem 1rem;
+            margin-bottom: 1rem;
+        }
+        .none { color: #aaa; font-size: 0.85rem; margin: 0.25rem 0; }
+        .keywords ul { list-style: none; margin: 0; padding: 0; column-width: 14rem; column-gap: 2rem; }
+        .keywords li {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.15rem 0;
+            border-bottom: 1px dashed rgba(127,127,127,0.2);
+            break-inside: avoid;
+        }
+        .keywords .score { color: #999; font-size: 0.75rem; }
+        .graph-body { position: relative; margin-top: 0.5rem; }
+        #graph-canvas { width: 100%; height: 380px; display: block; }
+        pre.transcript {
+            white-space: pre-wrap;
+            background: rgba(127,127,127,0.08);
+            padding: 0.8rem;
+            border-radius: 4px;
+            margin: 0.5rem 0 0;
+            max-height: 480px;
+            overflow: auto;
+            font-size: 0.82rem;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+    </style>
+</head>
+<body>
+    <p class="topbar"><a href="/">← ジョブ一覧へ戻る</a></p>
+    <h1>{{ job.filename }}</h1>
+    <p class="meta">
+        <span class="state state-{{ job.state }}">{{ job.state }}</span>
+        {% if job.finished_at %} 完了: {{ job.finished_at }}{% endif %}
+    </p>
+
+    <div class="panel keywords">
+        <h2>キーワード</h2>
+        {% if keywords %}
+        <ul>
+            {% for kw in keywords %}
+            <li><span>{{ kw.word }}</span><span class="score">{{ '%.1f'|format(kw.score) }}</span></li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p class="none">なし（このジョブは成果物未生成です）</p>
+        {% endif %}
+    </div>
+
+    <div class="panel">
+        <h2>言葉のネットワーク</h2>
+        {% if graph and graph.nodes %}
+        <div class="graph-body">
+            <canvas id="graph-canvas"></canvas>
+        </div>
+        <script type="application/json" id="graph-data">{{ graph|tojson }}</script>
+        <script>
+        // Static word-network renderer, condensed from live.html (lines
+        // 406-594): WS handling / collapse toggle / incremental reheat paths
+        // removed. Consumes one CooccurrenceGraph.snapshot() as-is, lays out
+        // once, runs the rAF loop until energy drops below the rest
+        // threshold, then stops. Resize / tab re-show re-heat it.
+        (() => {
+            const snapshot = JSON.parse(document.getElementById("graph-data").textContent);
+            const graphCanvas = document.getElementById("graph-canvas");
+            const graphCtx = graphCanvas.getContext("2d");
+
+            const GRAPH_REPULSION = 3200;   // O(n^2) pair repulsion, fine for <=40 nodes
+            const GRAPH_SPRING = 0.02;
+            const GRAPH_SPRING_LENGTH = 90;
+            const GRAPH_CENTER_PULL = 0.012;
+            const GRAPH_DAMPING = 0.85;
+            const GRAPH_MIN_ENERGY = 0.05;  // rest threshold: stop the rAF loop below it
+            const GRAPH_MARGIN = 14;
+
+            const graphNodes = new Map(); // id -> {x, y, vx, vy, weight, lastSeen}
+            let graphEdges = [];
+            let graphSeq = 0;
+            let graphRafId = null;
+
+            function graphSize() {
+                return { w: graphCanvas.clientWidth || 600, h: graphCanvas.clientHeight || 340 };
+            }
+
+            function resizeGraphCanvas() {
+                const dpr = window.devicePixelRatio || 1;
+                const { w, h } = graphSize();
+                graphCanvas.width = Math.round(w * dpr);
+                graphCanvas.height = Math.round(h * dpr);
+                graphCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            }
+
+            function applyGraph(msg) {
+                graphSeq = msg.seq || 0;
+                const { w, h } = graphSize();
+                (msg.nodes || []).forEach((n) => {
+                    graphNodes.set(n.id, {
+                        x: w / 2 + (Math.random() - 0.5) * 60,
+                        y: h / 2 + (Math.random() - 0.5) * 60,
+                        vx: 0,
+                        vy: 0,
+                        weight: n.weight,
+                        lastSeen: n.last_seen,
+                    });
+                });
+                graphEdges = (msg.edges || []).filter(
+                    (e) => graphNodes.has(e.a) && graphNodes.has(e.b)
+                );
+            }
+
+            function simulateGraph() {
+                const { w, h } = graphSize();
+                const nodes = Array.from(graphNodes.values());
+                for (let i = 0; i < nodes.length; i++) {
+                    for (let j = i + 1; j < nodes.length; j++) {
+                        const a = nodes[i];
+                        const b = nodes[j];
+                        let dx = a.x - b.x;
+                        let dy = a.y - b.y;
+                        let d2 = dx * dx + dy * dy;
+                        if (d2 < 1) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 1; }
+                        const dist = Math.sqrt(d2);
+                        const force = GRAPH_REPULSION / d2;
+                        const fx = (dx / dist) * force;
+                        const fy = (dy / dist) * force;
+                        a.vx += fx; a.vy += fy;
+                        b.vx -= fx; b.vy -= fy;
+                    }
+                }
+                graphEdges.forEach((edge) => {
+                    const a = graphNodes.get(edge.a);
+                    const b = graphNodes.get(edge.b);
+                    const dx = b.x - a.x;
+                    const dy = b.y - a.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                    const pull = (dist - GRAPH_SPRING_LENGTH) * GRAPH_SPRING * Math.min(edge.weight, 4);
+                    const fx = (dx / dist) * pull;
+                    const fy = (dy / dist) * pull;
+                    a.vx += fx; a.vy += fy;
+                    b.vx -= fx; b.vy -= fy;
+                });
+                let energy = 0;
+                nodes.forEach((n) => {
+                    n.vx += (w / 2 - n.x) * GRAPH_CENTER_PULL;
+                    n.vy += (h / 2 - n.y) * GRAPH_CENTER_PULL;
+                    n.vx *= GRAPH_DAMPING;
+                    n.vy *= GRAPH_DAMPING;
+                    n.x = Math.max(GRAPH_MARGIN, Math.min(w - GRAPH_MARGIN, n.x + n.vx));
+                    n.y = Math.max(GRAPH_MARGIN, Math.min(h - GRAPH_MARGIN, n.y + n.vy));
+                    energy += n.vx * n.vx + n.vy * n.vy;
+                });
+                return nodes.length ? energy / nodes.length : 0;
+            }
+
+            function drawGraph() {
+                const { w, h } = graphSize();
+                const inkColor = getComputedStyle(document.body).color; // light/dark aware
+                graphCtx.clearRect(0, 0, w, h);
+                graphCtx.strokeStyle = inkColor;
+                graphEdges.forEach((edge) => {
+                    const a = graphNodes.get(edge.a);
+                    const b = graphNodes.get(edge.b);
+                    graphCtx.globalAlpha = Math.min(0.12 + edge.weight * 0.08, 0.55);
+                    graphCtx.lineWidth = Math.min(0.5 + edge.weight * 0.5, 3);
+                    graphCtx.beginPath();
+                    graphCtx.moveTo(a.x, a.y);
+                    graphCtx.lineTo(b.x, b.y);
+                    graphCtx.stroke();
+                });
+                graphCtx.textAlign = "center";
+                graphCtx.textBaseline = "bottom";
+                graphNodes.forEach((n, id) => {
+                    const age = Math.max(0, graphSeq - n.lastSeen);
+                    const fade = Math.max(0.35, 1 - age * 0.06); // older words dim out
+                    const radius = Math.min(4 + n.weight * 2, 16);
+                    graphCtx.globalAlpha = fade;
+                    graphCtx.fillStyle = "#1a7f37";
+                    graphCtx.beginPath();
+                    graphCtx.arc(n.x, n.y, radius, 0, Math.PI * 2);
+                    graphCtx.fill();
+                    graphCtx.fillStyle = inkColor;
+                    graphCtx.font = (n.weight > 2 ? "600 " : "") + "12px sans-serif";
+                    graphCtx.fillText(id, n.x, n.y - radius - 3);
+                });
+                graphCtx.globalAlpha = 1;
+            }
+
+            function graphFrame() {
+                graphRafId = null;
+                if (document.hidden) return; // power saving: halt
+                const energy = simulateGraph();
+                drawGraph();
+                if (energy > GRAPH_MIN_ENERGY) {
+                    graphRafId = requestAnimationFrame(graphFrame);
+                }
+            }
+
+            function reheatGraph() {
+                if (document.hidden || graphRafId !== null) return;
+                graphRafId = requestAnimationFrame(graphFrame);
+            }
+
+            document.addEventListener("visibilitychange", () => {
+                if (!document.hidden) reheatGraph();
+            });
+            window.addEventListener("resize", () => {
+                resizeGraphCanvas();
+                reheatGraph();
+            });
+
+            resizeGraphCanvas();
+            applyGraph(snapshot);
+            reheatGraph();
+        })();
+        </script>
+        {% else %}
+        <p class="none">なし（このジョブは成果物未生成です）</p>
+        {% endif %}
+    </div>
+
+    <div class="panel">
+        <h2>文字起こし</h2>
+        {% if text %}
+        <pre class="transcript">{{ text }}</pre>
+        {% else %}
+        <p class="none">なし</p>
+        {% endif %}
+    </div>
+</body>
+</html>

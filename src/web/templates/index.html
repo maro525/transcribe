@@ -3,7 +3,6 @@
 <head>
     <meta charset="UTF-8">
     <title>Transcribe Dashboard</title>
-    <script src="https://unpkg.com/htmx.org@2.0.3"></script>
     <style>
         :root { color-scheme: light dark; }
         body {
@@ -93,7 +92,6 @@
     <div id="jobs-root">
         {% include "_jobs.html" %}
     </div>
-    <div id="viewer"></div>
     <script>
         (() => {
             const systemMessage = document.getElementById("system-message");
@@ -170,10 +168,8 @@
                     const actionCell = document.createElement("td");
                     if (job.state === "done" && job.output_path) {
                         const link = document.createElement("a");
-                        link.textContent = "表示";
-                        link.setAttribute("hx-get", `/jobs/${encodeURIComponent(job.filename)}/transcript`);
-                        link.setAttribute("hx-target", "#viewer");
-                        link.setAttribute("hx-swap", "innerHTML");
+                        link.textContent = "詳細";
+                        link.href = `/jobs/${encodeURIComponent(job.filename)}`;
                         actionCell.appendChild(link);
                     } else if (job.state === "error") {
                         const error = document.createElement("span");
@@ -187,7 +183,6 @@
                 });
                 table.appendChild(tbody);
                 jobsRoot.appendChild(table);
-                if (window.htmx) window.htmx.process(jobsRoot);
             }
 
             function applySnapshot(payload) {
@@ -220,7 +215,6 @@
                                 fallbackStatus.remove();
                             }
                             jobsRoot.replaceChildren(...Array.from(wrapper.childNodes));
-                            if (window.htmx) window.htmx.process(jobsRoot);
                         }
                     } catch (_) {
                         // Keep trying on the next interval.

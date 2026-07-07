@@ -7,10 +7,18 @@ from queue import Empty
 from typing import Any, AsyncIterator, Callable
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
+from .. import config
+from ..artifacts import load_graph, load_keywords
 from ..live.session import LiveSessionError, manager as live_manager
 from ..status import StoreEvent, store
 
@@ -35,6 +43,12 @@ def _origin_allowed(websocket: WebSocket) -> bool:
     host = websocket.headers.get("host", "")
     origin_host = urlsplit(origin).netloc
     return bool(host) and origin_host == host
+
+
+def _reject_traversal(filename: str) -> None:
+    """404 any path-like filename before it reaches the filesystem (D6)."""
+    if Path(filename).name != filename:
+        raise HTTPException(status_code=404)
 
 
 def format_sse(
@@ -107,8 +121,11 @@ def create_app(lifespan: LifespanFactory | None = None) -> FastAPI:
             },
         )
 
+    # Deprecated: kept for one release for compatibility (D2). The UI now
+    # links to the full detail page below instead.
     @app.get("/jobs/{filename}/transcript", response_class=HTMLResponse)
     def transcript(request: Request, filename: str):
+        _reject_traversal(filename)
         job = store.get(filename)
         text = ""
         if job and job.output_path and Path(job.output_path).exists():
@@ -117,6 +134,30 @@ def create_app(lifespan: LifespanFactory | None = None) -> FastAPI:
             request,
             "_transcript.html",
             {"request": request, "job": job, "text": text},
+        )
+
+    @app.get("/jobs/{filename}", response_class=HTMLResponse)
+    def job_detail(request: Request, filename: str):
+        _reject_traversal(filename)
+        job = store.get(filename)
+        if job is None:
+            raise HTTPException(status_code=404)
+        text = ""
+        if job.output_path and Path(job.output_path).exists():
+            text = Path(job.output_path).read_text(encoding="utf-8")
+        stem = Path(filename).stem
+        keywords = load_keywords(config.OUTPUT_DIR, stem)
+        graph = load_graph(config.OUTPUT_DIR, stem)
+        return templates.TemplateResponse(
+            request,
+            "detail.html",
+            {
+                "request": request,
+                "job": job,
+                "text": text,
+                "keywords": keywords["keywords"] if keywords else None,
+                "graph": graph["graph"] if graph else None,
+            },
         )
 
     @app.get("/events")

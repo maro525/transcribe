@@ -21,7 +21,7 @@
             <td class="current">{{ job.current_text or '' }}</td>
             <td>
                 {% if job.state == 'done' and job.output_path %}
-                    <a hx-get="/jobs/{{ job.filename|urlencode|replace('/', '%2F') }}/transcript" hx-target="#viewer" hx-swap="innerHTML">表示</a>
+                    <a href="/jobs/{{ job.filename|urlencode|replace('/', '%2F') }}">詳細</a>
                 {% elif job.state == 'error' %}
                     <span style="color:#a33; font-size:0.8rem">{{ job.error }}</span>
                 {% endif %}
