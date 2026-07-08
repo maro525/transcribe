@@ -45,6 +45,26 @@
         .keywords .score { color: #999; font-size: 0.75rem; }
         .graph-body { position: relative; margin-top: 0.5rem; }
         #graph-canvas { width: 100%; height: 380px; display: block; }
+        .structure-body { position: relative; margin-top: 0.5rem; }
+        #structure-canvas { width: 100%; display: block; }
+        .structure-note { color: #999; font-size: 0.72rem; margin: 0.4rem 0 0; }
+        .structure-legend {
+            display: flex; flex-wrap: wrap; gap: 0.4rem 1.1rem;
+            font-size: 0.75rem; color: #888; margin: 0.4rem 0 0;
+            list-style: none; padding: 0;
+        }
+        .structure-legend .swatch {
+            display: inline-block; width: 22px; height: 0;
+            border-top-width: 2px; margin-right: 0.35rem;
+            vertical-align: middle;
+        }
+        #structure-tooltip {
+            position: absolute; display: none; max-width: 340px;
+            padding: 0.45rem 0.6rem; font-size: 0.75rem; line-height: 1.4;
+            background: rgba(30,30,30,0.94); color: #eee;
+            border-radius: 4px; pointer-events: none; z-index: 5;
+            white-space: pre-wrap; word-break: break-word;
+        }
         pre.transcript {
             white-space: pre-wrap;
             background: rgba(127,127,127,0.08);
@@ -247,6 +267,225 @@
         </script>
         {% else %}
         <p class="none">なし（このジョブは成果物未生成です）</p>
+        {% endif %}
+    </div>
+
+    <div class="panel">
+        <h2>議論の構造</h2>
+        {% if structure and structure.statements %}
+        <div class="structure-body">
+            <canvas id="structure-canvas"></canvas>
+            <div id="structure-tooltip"></div>
+        </div>
+        <ul class="structure-legend">
+            <li><span class="swatch" style="border-top:2px solid #1a7f37"></span>supports（根拠→主張）</li>
+            <li><span class="swatch" style="border-top:2px solid #0969da"></span>causes（原因→結果）</li>
+            <li><span class="swatch" style="border-top:2px dotted #8b949e"></span>elaborates（元→詳細）</li>
+            <li><span class="swatch" style="border-top:2px dashed #d97706"></span>contrasts（後→先）</li>
+        </ul>
+        <p class="structure-note">
+            自動検出された構造であり、正解（ground truth）ではありません。
+            抽出: {{ structure.extractors[0].name if structure.extractors else "?" }}{% if structure.extractors and structure.extractors[0].model %}（{{ structure.extractors[0].model }}）{% endif %}
+        </p>
+        <script type="application/json" id="structure-data">{{ structure|tojson }}</script>
+        <script>
+        // Deterministic layered DAG renderer (no force physics, no Math.random):
+        // one horizontal lane per topic (+ "その他"), statements placed left-to-
+        // right in transcript order on a shared time axis, arrows styled by
+        // relation type. Hover shows speaker/source text/evidence.
+        (() => {
+            const data = JSON.parse(document.getElementById("structure-data").textContent);
+            const canvas = document.getElementById("structure-canvas");
+            const ctx = canvas.getContext("2d");
+            const tooltip = document.getElementById("structure-tooltip");
+
+            const LANE_HEIGHT = 96;
+            const MARGIN_X = 56;
+            const LANE_LABEL_GAP = 14;
+            const NODE_RADIUS = 5;
+            const REL_STYLE = {
+                supports:   { color: "#1a7f37", dash: [] },
+                causes:     { color: "#0969da", dash: [] },
+                elaborates: { color: "#8b949e", dash: [2, 3] },
+                contrasts:  { color: "#d97706", dash: [7, 4] },
+            };
+
+            const statements = data.statements || [];
+            const relations = data.relations || [];
+            const topics = data.topics || [];
+
+            // Lane order: topics as delivered (already deterministic), plus a
+            // trailing "その他" lane when any statement has no topic.
+            const laneIds = topics.map((t) => t.id);
+            const laneLabels = topics.map((t) => t.label);
+            if (statements.some((s) => !s.topic_id)) {
+                laneIds.push(null);
+                laneLabels.push("その他");
+            }
+            const laneIndex = new Map(laneIds.map((id, i) => [id, i]));
+
+            const width = () => canvas.clientWidth || 900;
+            const height = () => laneIds.length * LANE_HEIGHT + 20;
+
+            // x: shared time axis by statement order; y: lane center with a
+            // deterministic 3-step vertical offset to reduce label overlap.
+            const pos = new Map();
+            statements.forEach((s, i) => {
+                const lane = laneIndex.has(s.topic_id) ? laneIndex.get(s.topic_id) : laneIds.length - 1;
+                const denom = Math.max(1, statements.length - 1);
+                const x = MARGIN_X + (i / denom) * (width() - MARGIN_X - 24);
+                const y = lane * LANE_HEIGHT + LANE_HEIGHT / 2 + ((i % 3) - 1) * 14;
+                pos.set(s.id, { x, y, statement: s });
+            });
+
+            function resize() {
+                const dpr = window.devicePixelRatio || 1;
+                canvas.style.height = height() + "px";
+                canvas.width = Math.round(width() * dpr);
+                canvas.height = Math.round(height() * dpr);
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                // recompute x positions for the new width
+                statements.forEach((s, i) => {
+                    const p = pos.get(s.id);
+                    const denom = Math.max(1, statements.length - 1);
+                    p.x = MARGIN_X + (i / denom) * (width() - MARGIN_X - 24);
+                });
+            }
+
+            function arrow(a, b, style, confidence) {
+                ctx.strokeStyle = style.color;
+                ctx.fillStyle = style.color;
+                ctx.globalAlpha = 0.35 + confidence * 0.55;
+                ctx.lineWidth = 1 + confidence;
+                ctx.setLineDash(style.dash);
+                const mx = (a.x + b.x) / 2;
+                const my = (a.y + b.y) / 2 - (a.y === b.y ? 26 : 0); // arc same-lane edges
+                ctx.beginPath();
+                ctx.moveTo(a.x, a.y);
+                ctx.quadraticCurveTo(mx, my, b.x, b.y);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                // arrowhead at target, oriented along the curve end tangent
+                const angle = Math.atan2(b.y - my, b.x - mx);
+                const size = 6;
+                ctx.beginPath();
+                ctx.moveTo(b.x, b.y);
+                ctx.lineTo(b.x - size * Math.cos(angle - 0.45), b.y - size * Math.sin(angle - 0.45));
+                ctx.lineTo(b.x - size * Math.cos(angle + 0.45), b.y - size * Math.sin(angle + 0.45));
+                ctx.closePath();
+                ctx.fill();
+                ctx.globalAlpha = 1;
+            }
+
+            function draw(hoverId) {
+                const ink = getComputedStyle(document.body).color; // light/dark aware
+                ctx.clearRect(0, 0, width(), height());
+
+                // lane separators + labels
+                ctx.font = "600 11px sans-serif";
+                ctx.textAlign = "left";
+                ctx.textBaseline = "top";
+                laneIds.forEach((id, lane) => {
+                    const top = lane * LANE_HEIGHT;
+                    if (lane > 0) {
+                        ctx.strokeStyle = ink;
+                        ctx.globalAlpha = 0.12;
+                        ctx.lineWidth = 1;
+                        ctx.beginPath();
+                        ctx.moveTo(0, top);
+                        ctx.lineTo(width(), top);
+                        ctx.stroke();
+                        ctx.globalAlpha = 1;
+                    }
+                    ctx.fillStyle = ink;
+                    ctx.globalAlpha = 0.55;
+                    ctx.fillText(laneLabels[lane], 8, top + LANE_LABEL_GAP - 8);
+                    ctx.globalAlpha = 1;
+                });
+
+                relations.forEach((r) => {
+                    const a = pos.get(r.source);
+                    const b = pos.get(r.target);
+                    if (!a || !b) return;
+                    arrow(a, b, REL_STYLE[r.type] || REL_STYLE.elaborates, r.confidence || 0.5);
+                });
+
+                const dense = statements.length > 1
+                    && (width() - MARGIN_X) / statements.length < 46;
+                ctx.textAlign = "center";
+                ctx.textBaseline = "bottom";
+                pos.forEach((p, id) => {
+                    const hovered = id === hoverId;
+                    ctx.fillStyle = hovered ? "#d4a72c" : "#1a7f37";
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, hovered ? NODE_RADIUS + 2 : NODE_RADIUS, 0, Math.PI * 2);
+                    ctx.fill();
+                    if (!dense || hovered) {
+                        const label = p.statement.text.length > 12
+                            ? p.statement.text.slice(0, 12) + "…"
+                            : p.statement.text;
+                        ctx.fillStyle = ink;
+                        ctx.globalAlpha = hovered ? 1 : 0.8;
+                        ctx.font = (hovered ? "600 " : "") + "11px sans-serif";
+                        ctx.fillText(label, p.x, p.y - NODE_RADIUS - 3);
+                        ctx.globalAlpha = 1;
+                    }
+                });
+            }
+
+            function nodeAt(x, y) {
+                let best = null;
+                let bestDist = 12 * 12; // hit radius
+                pos.forEach((p, id) => {
+                    const d = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y);
+                    if (d < bestDist) { bestDist = d; best = id; }
+                });
+                return best;
+            }
+
+            function relationSummary(id) {
+                const lines = [];
+                relations.forEach((r) => {
+                    if (r.source !== id && r.target !== id) return;
+                    const other = pos.get(r.source === id ? r.target : r.source);
+                    if (!other) return;
+                    const dir = r.source === id ? "→" : "←";
+                    const marker = r.evidence && r.evidence.marker ? `「${r.evidence.marker}」` : "";
+                    lines.push(`${r.type} ${dir} ${other.statement.text.slice(0, 20)} ${marker}`);
+                });
+                return lines;
+            }
+
+            canvas.addEventListener("mousemove", (event) => {
+                const rect = canvas.getBoundingClientRect();
+                const x = event.clientX - rect.left;
+                const y = event.clientY - rect.top;
+                const id = nodeAt(x, y);
+                draw(id);
+                if (id) {
+                    const p = pos.get(id);
+                    const lines = [`[${p.statement.speaker || "?"}] ${p.statement.text}`]
+                        .concat(relationSummary(id));
+                    tooltip.textContent = lines.join("\n");
+                    tooltip.style.left = Math.min(x + 14, width() - 200) + "px";
+                    tooltip.style.top = (y + 14) + "px";
+                    tooltip.style.display = "block";
+                } else {
+                    tooltip.style.display = "none";
+                }
+            });
+            canvas.addEventListener("mouseleave", () => {
+                tooltip.style.display = "none";
+                draw(null);
+            });
+            window.addEventListener("resize", () => { resize(); draw(null); });
+
+            resize();
+            draw(null);
+        })();
+        </script>
+        {% else %}
+        <p class="none">なし（このジョブは構造抽出前に処理されたか、抽出に失敗しました）</p>
         {% endif %}
     </div>
 

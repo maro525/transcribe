@@ -21,6 +21,19 @@ WATCH_INTERVAL_SECONDS = 30
 WEB_HOST = os.environ.get("WEB_HOST", "127.0.0.1")
 WEB_PORT = int(os.environ.get("WEB_PORT", "8000"))
 
+# --- Discourse structure extraction (batch artifacts) ------------------------
+# Primary extractor is Claude via the official anthropic SDK; the API key is
+# resolved from ANTHROPIC_API_KEY by the SDK (never hardcoded). When the key
+# or the SDK is absent — or the API call fails — batch processing falls back
+# to the deterministic marker-based extractor (src/discourse.py) and the job
+# still completes. Set DISCOURSE_ENABLED=0 to skip structure generation.
+DISCOURSE_ENABLED = os.environ.get("DISCOURSE_ENABLED", "1") not in ("0", "false", "")
+DISCOURSE_MODEL = os.environ.get("DISCOURSE_MODEL", "claude-opus-4-8")
+DISCOURSE_EFFORT = os.environ.get("DISCOURSE_EFFORT", "high")
+# Meeting-length structure JSON can be large; streaming is used so a big
+# max_tokens does not trip SDK timeout guards.
+DISCOURSE_MAX_TOKENS = int(os.environ.get("DISCOURSE_MAX_TOKENS", "32000"))
+
 # --- Live (realtime) mode ---------------------------------------------------
 # Quantization default is q8_0: near-lossless vs f16 for large-v3-turbo at
 # roughly half the size/VRAM (~870 MB vs ~1.6 GB), and acceptable on CPU.

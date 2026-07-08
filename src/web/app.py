@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from .. import config
-from ..artifacts import load_graph, load_keywords
+from ..artifacts import load_graph, load_keywords, load_structure
 from ..live.session import LiveSessionError, manager as live_manager
 from ..status import StoreEvent, store
 
@@ -148,6 +148,7 @@ def create_app(lifespan: LifespanFactory | None = None) -> FastAPI:
         stem = Path(filename).stem
         keywords = load_keywords(config.OUTPUT_DIR, stem)
         graph = load_graph(config.OUTPUT_DIR, stem)
+        structure = load_structure(config.OUTPUT_DIR, stem)  # file read only
         return templates.TemplateResponse(
             request,
             "detail.html",
@@ -157,6 +158,7 @@ def create_app(lifespan: LifespanFactory | None = None) -> FastAPI:
                 "text": text,
                 "keywords": keywords["keywords"] if keywords else None,
                 "graph": graph["graph"] if graph else None,
+                "structure": structure,
             },
         )
 

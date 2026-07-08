@@ -90,11 +90,9 @@ def run() -> None:
             )
             output_path = save_transcript(segments, file_path.name, config.OUTPUT_DIR)
             try:
-                save_artifacts(
-                    config.OUTPUT_DIR,
-                    file_path.name,
-                    [segment.text for segment in segments],
-                )
+                # Full segments (speaker/start/end/text): keywords/graph use
+                # the text only; the discourse structure needs speaker turns.
+                save_artifacts(config.OUTPUT_DIR, file_path.name, segments)
             except Exception as error:  # best-effort; never fail the job
                 print(f"Artifact generation failed for {file_path.name}: {error}")
             move_to_done(file_path, config.DONE_DIR)
