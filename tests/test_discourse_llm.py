@@ -67,7 +67,9 @@ VALID_PAYLOAD = {
     "relations": [
         {"source": "s1", "target": "s2", "type": "elaborates", "confidence": 1.5},
     ],
-    "topics": [{"id": "t1", "label": "設計", "statement_ids": ["s1", "s2"]}],
+    "topics": [
+        {"id": "t1", "label": "設計", "summary": "設計方針の議論", "statement_ids": ["s1", "s2"]}
+    ],
 }
 
 UTTS = [
@@ -99,6 +101,7 @@ def test_extract_parses_and_clamps_confidence():
     assert result.relations[0].confidence == 1.0  # clamped from 1.5
     assert result.relations[0].evidence == {"rule": "llm"}
     assert {t.label for t in result.topics} == {"設計"}
+    assert result.topics[0].summary == "設計方針の議論"
 
 
 def test_extract_returns_none_on_api_error():

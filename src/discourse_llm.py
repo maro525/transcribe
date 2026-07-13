@@ -88,9 +88,10 @@ EXTRACTION_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "id": {"type": "string"},
                     "label": {"type": "string"},
+                    "summary": {"type": "string"},
                     "statement_ids": {"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["id", "label", "statement_ids"],
+                "required": ["id", "label", "summary", "statement_ids"],
                 "additionalProperties": False,
             },
         },
@@ -107,8 +108,8 @@ SYSTEM_PROMPT = """\
 
 手順:
 1. 各発話を statement(主張・根拠・事実などの論点)に分割する。\
-statement の text はその論点を短く言い換えた**要約**(20〜40字程度、体言止め可)にする。\
-逐語の引用は不要。utterance_index は入力で示された発話番号、id は "s1" からの連番。
+statement の text はその論点を凝縮した**短い要約**(10〜20字程度、体言止め推奨)にする。\
+逐語をなぞらず要点だけを残すこと。utterance_index は入力で示された発話番号、id は "s1" からの連番。
 2. statement 間の論理関係を抽出する。型と方向の規約:
    - supports: 根拠 → 主張(source が根拠)
    - causes: 原因 → 結果(source が原因)
@@ -117,6 +118,7 @@ statement の text はその論点を短く言い換えた**要約**(20〜40字�
    confidence は 0〜1 の実数。確信のない関係は出力しない(高精度優先)。
 3. **すべての statement をいずれかの話題(topic)に必ず割り当てる**。「その他」的な\
 受け皿は作らず、内容の近い statement をまとめること。label は短い日本語名詞句、\
+summary はその話題で何が話し合われたかを 1 文(40〜60字程度)にまとめた要約、\
 statement_ids は所属 statement の id 列。1 つの statement は 1 つの topic のみに属する。
 
 出力は指定スキーマの JSON のみ。会話にない内容を創作しないこと。"""
@@ -229,6 +231,7 @@ def _parse_extraction(data: Any) -> DiscourseExtraction:
             id=str(item["id"]),
             label=str(item["label"]),
             statement_ids=tuple(str(sid) for sid in item["statement_ids"]),
+            summary=str(item.get("summary", "")),
         )
         for item in data["topics"]
     )

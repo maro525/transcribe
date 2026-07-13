@@ -134,6 +134,25 @@ def test_build_structure_assigns_topic_ids_from_llm_topics():
     assert all(s["topic_id"] for s in payload["statements"])
 
 
+def test_build_structure_topics_include_summary():
+    utts = [_utt(0, "A", "設計の話"), _utt(1, "B", "予算の話")]
+    extraction = DiscourseExtraction(
+        statements=(
+            Statement("s1", 0, "A", "設計の要約"),
+            Statement("s2", 1, "B", "予算の要約"),
+        ),
+        relations=(),
+        topics=(
+            Topic("t1", "設計", ("s1",), summary="設計方針を検討した"),
+            Topic("t2", "予算", ("s2",)),
+        ),
+    )
+    payload = build_structure(utts, FakeExtractor(extraction))
+    by_id = {t["id"]: t for t in payload["topics"]}
+    assert by_id["t1"]["summary"] == "設計方針を検討した"
+    assert by_id["t2"]["summary"] == ""  # default when omitted
+
+
 def test_validate_clamps_confidence():
     utts = [_utt(0, "A", "aとbとc")]
     ext = DiscourseExtraction(
