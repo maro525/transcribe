@@ -464,13 +464,17 @@
             const ctx = canvas.getContext("2d");
             const tooltip = document.getElementById("structure-tooltip");
 
-            const GUTTER = 26;   // left rail width for relation connectors
-            const DOT_X = GUTTER + 6;  // dot x — single column, dots stacked
+            const LEFT_PAD = 20;   // x of depth-0 dots
+            const DEPTH_STEP = 30; // x offset per logical-depth level (wide arrow area)
+            const MAX_DEPTH = 5;   // cap indentation so dots stay on-canvas
+            const ARROW_W = LEFT_PAD + MAX_DEPTH * DEPTH_STEP;  // dedicated arrow region
+            const TEXT_X = ARROW_W + 16;  // summary column, aligned right of the arrows
             const ROW_H = 30;    // height per statement row
-            const HEAD_H = 26;   // height per topic-section header row
-            const GAP = 10;      // gap before each topic section
+            const HEAD_H = 44;   // topic-section header (label + summary lines)
+            const GAP = 12;      // gap before each topic section
             const TOP = 6;
             const NODE_RADIUS = 5;
+            const LABEL_CAP = 28;  // hard cap on the on-canvas summary length
             const GRAY = "#8b949e";
             const REL_STYLE = {  // basic straight lines, colored by relation type
                 supports:   "#1a7f37",
@@ -499,17 +503,48 @@
             // "その他" only when some statement has no topic at all.
             const laneIds = topics.map((t) => t.id);
             const laneLabels = new Map(topics.map((t) => [t.id, t.label]));
+            const laneSummary = new Map(topics.map((t) => [t.id, t.summary || ""]));
             if (statements.some((s) => !topicOf(s))) {
                 laneIds.push(null);
                 laneLabels.set(null, "その他");
             }
+            // Per-topic "what was discussed" line: the LLM summary when present,
+            // else a derived join of the first couple member statement summaries.
+            function summaryFor(laneId, members) {
+                const given = laneSummary.get(laneId);
+                if (given) return given;
+                return members.slice(0, 2).map((s) => s.text).join(" / ");
+            }
 
-            // Single vertical column grouped by topic: each section is a topic
-            // header row followed by its statements as stacked dot+summary rows.
-            // Grows downward as statements accumulate.
+            // Logical depth: 0 for statements with no incoming relation, else
+            // 1 + max(depth(source)). Dots are indented by depth so arrows can
+            // connect them directly (memoized DFS with a cycle guard).
+            const incoming = new Map();
+            relations.forEach((r) => {
+                if (!incoming.has(r.target)) incoming.set(r.target, []);
+                incoming.get(r.target).push(r.source);
+            });
+            const depthCache = new Map();
+            function depthOf(id, stack) {
+                if (depthCache.has(id)) return depthCache.get(id);
+                stack = stack || new Set();
+                if (stack.has(id)) return 0;  // cycle guard
+                stack.add(id);
+                let d = 0;
+                (incoming.get(id) || []).forEach((src) => {
+                    d = Math.max(d, 1 + depthOf(src, stack));
+                });
+                stack.delete(id);
+                depthCache.set(id, d);
+                return d;
+            }
+
+            // Vertical column grouped by topic; each dot is indented by its
+            // logical depth inside the left "arrow area", summaries aligned in a
+            // fixed column. Grows downward as statements accumulate.
             const width = () => canvas.clientWidth || 900;
             const pos = new Map();     // statement id -> {x, y, statement}
-            const sections = [];       // {label, color, y} header rows
+            const sections = [];       // {label, color, summary, y} header rows
             let contentH = TOP;
             function layout() {
                 pos.clear();
@@ -519,10 +554,16 @@
                     const members = statements.filter((s) => (topicOf(s) || null) === laneId);
                     if (!members.length) return;
                     y += GAP;
-                    sections.push({ label: laneLabels.get(laneId) || "その他", color: topicColor(laneId), y });
+                    sections.push({
+                        label: laneLabels.get(laneId) || "その他",
+                        color: topicColor(laneId),
+                        summary: summaryFor(laneId, members),
+                        y,
+                    });
                     y += HEAD_H;
                     members.forEach((s) => {
-                        pos.set(s.id, { x: DOT_X, y: y + ROW_H / 2, statement: s });
+                        const depth = Math.min(depthOf(s.id), MAX_DEPTH);
+                        pos.set(s.id, { x: LEFT_PAD + depth * DEPTH_STEP, y: y + ROW_H / 2, statement: s });
                         y += ROW_H;
                     });
                 });
@@ -539,27 +580,23 @@
                 ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             }
 
-            function arrow(a, b, color, confidence, railX) {
-                // straight segments only: stub out to the left rail, run
-                // vertically, stub back into the target dot from its left.
+            function arrow(a, b, color, confidence) {
+                // direct straight line between the two (depth-staggered) dots
                 ctx.strokeStyle = color;
                 ctx.fillStyle = color;
                 ctx.globalAlpha = 0.35 + confidence * 0.5;
                 ctx.lineWidth = 1 + confidence;
-                const ax = a.x - NODE_RADIUS;
-                const bx = b.x - NODE_RADIUS;
                 ctx.beginPath();
-                ctx.moveTo(ax, a.y);
-                ctx.lineTo(railX, a.y);
-                ctx.lineTo(railX, b.y);
-                ctx.lineTo(bx, b.y);
+                ctx.moveTo(a.x, a.y);
+                ctx.lineTo(b.x, b.y);
                 ctx.stroke();
-                // arrowhead entering the target dot from the left
-                const size = 6;
+                // arrowhead at the target, oriented along the line
+                const angle = Math.atan2(b.y - a.y, b.x - a.x);
+                const size = 7;
                 ctx.beginPath();
-                ctx.moveTo(bx, b.y);
-                ctx.lineTo(bx - size, b.y - size * 0.5);
-                ctx.lineTo(bx - size, b.y + size * 0.5);
+                ctx.moveTo(b.x, b.y);
+                ctx.lineTo(b.x - size * Math.cos(angle - 0.45), b.y - size * Math.sin(angle - 0.45));
+                ctx.lineTo(b.x - size * Math.cos(angle + 0.45), b.y - size * Math.sin(angle + 0.45));
                 ctx.closePath();
                 ctx.fill();
                 ctx.globalAlpha = 1;
@@ -569,35 +606,42 @@
                 const ink = getComputedStyle(document.body).color; // light/dark aware
                 ctx.clearRect(0, 0, width(), height());
 
-                // topic section headers (row, colored to match the treemap)
+                // topic section headers: colored label + a "what was discussed"
+                // summary line, with a divider under the header.
                 ctx.textAlign = "left";
-                ctx.textBaseline = "middle";
+                ctx.textBaseline = "alphabetic";
                 sections.forEach((sec) => {
+                    ctx.fillStyle = sec.color;
+                    ctx.font = "600 13px sans-serif";
+                    ctx.fillText(sec.label, 4, sec.y + 14);
+                    if (sec.summary) {
+                        ctx.fillStyle = ink;
+                        ctx.globalAlpha = 0.7;
+                        ctx.font = "12px sans-serif";
+                        const cap = Math.max(12, Math.floor((width() - 16) / 12));
+                        const sm = sec.summary.length > cap ? sec.summary.slice(0, cap - 1) + "…" : sec.summary;
+                        ctx.fillText(sm, 4, sec.y + 32);
+                        ctx.globalAlpha = 1;
+                    }
                     ctx.strokeStyle = ink;
                     ctx.globalAlpha = 0.12;
                     ctx.lineWidth = 1;
                     ctx.beginPath();
-                    ctx.moveTo(0, sec.y + HEAD_H - 4);
-                    ctx.lineTo(width(), sec.y + HEAD_H - 4);
+                    ctx.moveTo(0, sec.y + HEAD_H - 3);
+                    ctx.lineTo(width(), sec.y + HEAD_H - 3);
                     ctx.stroke();
                     ctx.globalAlpha = 1;
-                    ctx.fillStyle = sec.color;
-                    ctx.font = "600 13px sans-serif";
-                    ctx.fillText(sec.label, 4, sec.y + HEAD_H / 2);
                 });
 
-                // relations routed through the left rail (staggered so parallel
-                // edges don't perfectly overlap)
-                relations.forEach((r, i) => {
+                // relations: direct straight arrows between depth-staggered dots
+                relations.forEach((r) => {
                     const a = pos.get(r.source);
                     const b = pos.get(r.target);
                     if (!a || !b) return;
-                    const railX = 6 + (i % 3) * 6;
-                    arrow(a, b, REL_STYLE[r.type] || REL_STYLE.elaborates, r.confidence || 0.5, railX);
+                    arrow(a, b, REL_STYLE[r.type] || REL_STYLE.elaborates, r.confidence || 0.5);
                 });
 
-                // green dot + summary text to its right (always visible)
-                ctx.textAlign = "left";
+                // green dot (indented by depth) + short summary in a fixed column
                 ctx.textBaseline = "middle";
                 pos.forEach((p, id) => {
                     const hovered = id === hoverId;
@@ -605,13 +649,14 @@
                     ctx.beginPath();
                     ctx.arc(p.x, p.y, hovered ? NODE_RADIUS + 2 : NODE_RADIUS, 0, Math.PI * 2);
                     ctx.fill();
-                    const maxChars = Math.max(6, Math.floor((width() - DOT_X - 24) / 12));
+                    const avail = Math.floor((width() - TEXT_X - 8) / 12);
+                    const cap = Math.max(6, Math.min(LABEL_CAP, avail));
                     const t = p.statement.text || "";
-                    const label = t.length > maxChars ? t.slice(0, maxChars - 1) + "…" : t;
+                    const label = t.length > cap ? t.slice(0, cap - 1) + "…" : t;
                     ctx.fillStyle = ink;
                     ctx.globalAlpha = hovered ? 1 : 0.85;
                     ctx.font = (hovered ? "600 " : "") + "13px sans-serif";
-                    ctx.fillText(label, p.x + NODE_RADIUS + 6, p.y);
+                    ctx.fillText(label, TEXT_X, p.y);
                     ctx.globalAlpha = 1;
                 });
             }

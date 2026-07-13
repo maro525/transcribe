@@ -78,6 +78,7 @@ class Topic:
     id: str
     label: str
     statement_ids: tuple[str, ...] = ()
+    summary: str = ""  # 1-line "what was discussed" (LLM path; "" otherwise)
 
 
 @dataclass(frozen=True)
@@ -633,6 +634,7 @@ def build_structure(
             {
                 "id": t.id,
                 "label": t.label,
+                "summary": t.summary,
                 "statement_ids": list(t.statement_ids),
             }
             for t in topics
