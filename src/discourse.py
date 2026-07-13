@@ -464,8 +464,8 @@ def validate_extraction(
         utterance = by_index.get(statement.utterance_index)
         if utterance is None or not statement.text.strip():
             continue
-        if _normalize(statement.text) not in _normalize(utterance.text):
-            continue
+        # statement.text may be a summary (not a verbatim substring), so no
+        # substring check — utterance_index anchors it to a real turn.
         speaker = statement.speaker or utterance.speaker
         kept_statements.append(replace(statement, speaker=speaker))
 
@@ -554,6 +554,21 @@ def _find_cycle(relations: list[Relation]) -> list[Relation] | None:
 # ---------------------------------------------------------------------------
 
 
+def _assign_topic_ids(
+    statements: list[Statement], topics: list[Topic]
+) -> list[Statement]:
+    """Fill each statement's ``topic_id`` from the topics' ``statement_ids``
+    (LLM extractors report membership on topics, not on statements). First
+    topic wins if a statement is listed under several."""
+    by_statement: dict[str, str] = {}
+    for topic in topics:
+        for sid in topic.statement_ids:
+            by_statement.setdefault(sid, topic.id)
+    return [
+        replace(s, topic_id=by_statement.get(s.id, s.topic_id)) for s in statements
+    ]
+
+
 def build_structure(
     utterances: Iterable[Utterance | dict[str, Any]],
     extractor: RelationExtractor,
@@ -575,6 +590,10 @@ def build_structure(
     topics = list(extraction.topics)
     if not topics:
         statements, topics = cluster_topics(statements)
+    else:
+        # LLM returns membership on topics; mirror it onto each statement so
+        # the detail-page lanes/treemap can group by statement.topic_id.
+        statements = _assign_topic_ids(statements, topics)
     relations = break_cycles(list(extraction.relations))
 
     return {

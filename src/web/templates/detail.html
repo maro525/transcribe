@@ -47,6 +47,7 @@
         #graph-canvas { width: 100%; height: 380px; display: block; }
         .structure-body { position: relative; margin-top: 0.5rem; }
         #structure-canvas { width: 100%; display: block; }
+        #topics-canvas { width: 100%; display: block; }
         .structure-note { color: #999; font-size: 0.72rem; margin: 0.4rem 0 0; }
         .structure-legend {
             display: flex; flex-wrap: wrap; gap: 0.4rem 1.1rem;
@@ -85,6 +86,91 @@
         <span class="state state-{{ job.state }}">{{ job.state }}</span>
         {% if job.finished_at %} 完了: {{ job.finished_at }}{% endif %}
     </p>
+
+    {% if structure and structure.statements %}
+    <script type="application/json" id="structure-data">{{ structure|tojson }}</script>
+    {% endif %}
+
+    <div class="panel">
+        <h2>トピック</h2>
+        {% if structure and structure.topics %}
+        <div class="structure-body"><canvas id="topics-canvas"></canvas></div>
+        <p class="structure-note">会話で扱われた話題（面積 = その話題の発話量）</p>
+        <script>
+        (() => {
+            const el = document.getElementById("structure-data");
+            const canvas = document.getElementById("topics-canvas");
+            if (!el || !canvas) return;
+            const data = JSON.parse(el.textContent);
+            const ctx = canvas.getContext("2d");
+            const topics = data.topics || [];
+            const statements = data.statements || [];
+            const inTopic = new Set();
+            const items = topics.map((t) => {
+                (t.statement_ids || []).forEach((id) => inTopic.add(id));
+                return { label: t.label, value: Math.max(1, (t.statement_ids || []).length) };
+            });
+            const others = statements.filter((s) => !inTopic.has(s.id)).length;
+            if (others > 0) items.push({ label: "その他", value: others });
+            items.sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+            const PALETTE = ["#1a7f37", "#0969da", "#8250df", "#bf3989", "#d97706", "#0a7ea4", "#cf222e", "#57606a"];
+            const colorOf = (label) =>
+                label === "その他" ? "#8b949e" : PALETTE[items.findIndex((it) => it.label === label) % PALETTE.length];
+
+            // Deterministic binary-split treemap (alternating direction).
+            function split(list, x, y, w, h, horiz) {
+                if (list.length === 1) return [{ label: list[0].label, value: list[0].value, x, y, w, h }];
+                const total = list.reduce((s, it) => s + it.value, 0);
+                let acc = 0, i = 0;
+                while (i < list.length - 1 && acc + list[i].value < total / 2) { acc += list[i].value; i++; }
+                const left = list.slice(0, i + 1), right = list.slice(i + 1);
+                const frac = left.reduce((s, it) => s + it.value, 0) / total;
+                if (horiz) {
+                    const wl = w * frac;
+                    return split(left, x, y, wl, h, !horiz).concat(split(right, x + wl, y, w - wl, h, !horiz));
+                }
+                const hl = h * frac;
+                return split(left, x, y, w, hl, !horiz).concat(split(right, x, y + hl, w, h - hl, !horiz));
+            }
+
+            function render() {
+                const dpr = window.devicePixelRatio || 1;
+                const w = canvas.clientWidth || 900;
+                const h = 200;
+                canvas.style.height = h + "px";
+                canvas.width = Math.round(w * dpr);
+                canvas.height = Math.round(h * dpr);
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                ctx.clearRect(0, 0, w, h);
+                if (!items.length) return;
+                split(items.slice(), 0, 0, w, h, true).forEach((r) => {
+                    ctx.fillStyle = colorOf(r.label);
+                    ctx.globalAlpha = 0.85;
+                    ctx.fillRect(r.x + 1, r.y + 1, Math.max(0, r.w - 2), Math.max(0, r.h - 2));
+                    ctx.globalAlpha = 1;
+                    if (r.w > 46 && r.h > 22) {
+                        const maxChars = Math.max(1, Math.floor((r.w - 12) / 12));
+                        const label = r.label.length > maxChars ? r.label.slice(0, maxChars - 1) + "…" : r.label;
+                        ctx.fillStyle = "#fff";
+                        ctx.textAlign = "left";
+                        ctx.textBaseline = "top";
+                        ctx.font = "600 12px sans-serif";
+                        ctx.fillText(label, r.x + 6, r.y + 6);
+                        ctx.globalAlpha = 0.85;
+                        ctx.font = "11px sans-serif";
+                        ctx.fillText(r.value + " 件", r.x + 6, r.y + 22);
+                        ctx.globalAlpha = 1;
+                    }
+                });
+            }
+            render();
+            window.addEventListener("resize", render);
+        })();
+        </script>
+        {% else %}
+        <p class="none">なし（構造抽出前に処理されたか、抽出に失敗しました）</p>
+        {% endif %}
+    </div>
 
     <div class="panel keywords">
         <h2>キーワード</h2>
@@ -287,7 +373,6 @@
             自動検出された構造であり、正解（ground truth）ではありません。
             抽出: {{ structure.extractors[0].name if structure.extractors else "?" }}{% if structure.extractors and structure.extractors[0].model %}（{{ structure.extractors[0].model }}）{% endif %}
         </p>
-        <script type="application/json" id="structure-data">{{ structure|tojson }}</script>
         <script>
         // Deterministic layered DAG renderer (no force physics, no Math.random):
         // one horizontal lane per topic (+ "その他"), statements placed left-to-
@@ -314,11 +399,20 @@
             const relations = data.relations || [];
             const topics = data.topics || [];
 
+            // Topic membership is reported on topics[].statement_ids (LLM path);
+            // statement.topic_id is the secondary source (clustered/fallback
+            // path). Using both fixes "every statement lands in その他".
+            const stTopic = new Map();
+            topics.forEach((t) => (t.statement_ids || []).forEach((sid) => {
+                if (!stTopic.has(sid)) stTopic.set(sid, t.id);
+            }));
+            const topicOf = (s) => stTopic.get(s.id) || s.topic_id || null;
+
             // Lane order: topics as delivered (already deterministic), plus a
-            // trailing "その他" lane when any statement has no topic.
+            // trailing "その他" lane only when a statement has no topic at all.
             const laneIds = topics.map((t) => t.id);
             const laneLabels = topics.map((t) => t.label);
-            if (statements.some((s) => !s.topic_id)) {
+            if (statements.some((s) => !topicOf(s))) {
                 laneIds.push(null);
                 laneLabels.push("その他");
             }
@@ -331,7 +425,7 @@
             // deterministic 3-step vertical offset to reduce label overlap.
             const pos = new Map();
             statements.forEach((s, i) => {
-                const lane = laneIndex.has(s.topic_id) ? laneIndex.get(s.topic_id) : laneIds.length - 1;
+                const lane = laneIndex.has(topicOf(s)) ? laneIndex.get(topicOf(s)) : laneIds.length - 1;
                 const denom = Math.max(1, statements.length - 1);
                 const x = MARGIN_X + (i / denom) * (width() - MARGIN_X - 24);
                 const y = lane * LANE_HEIGHT + LANE_HEIGHT / 2 + ((i % 3) - 1) * 14;
@@ -421,8 +515,8 @@
                     ctx.arc(p.x, p.y, hovered ? NODE_RADIUS + 2 : NODE_RADIUS, 0, Math.PI * 2);
                     ctx.fill();
                     if (!dense || hovered) {
-                        const label = p.statement.text.length > 12
-                            ? p.statement.text.slice(0, 12) + "…"
+                        const label = p.statement.text.length > 18
+                            ? p.statement.text.slice(0, 18) + "…"
                             : p.statement.text;
                         ctx.fillStyle = ink;
                         ctx.globalAlpha = hovered ? 1 : 0.8;

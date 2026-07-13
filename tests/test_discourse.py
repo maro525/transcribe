@@ -89,25 +89,49 @@ def test_fallback_is_deterministic():
     assert key(a) == key(b)
 
 
-def test_validate_drops_bad_statements_relations_topics():
+def test_validate_keeps_summaries_drops_bad_refs():
+    # statement.text may be a summary (not a substring) — only bad utterance
+    # refs / empty text / bad relations / unknown topic members are dropped.
     utts = [_utt(0, "A", "実際の発話テキスト")]
     ext = DiscourseExtraction(
         statements=(
-            Statement("s1", 0, "A", "実際の発話"),  # substring -> kept
-            Statement("s2", 0, "A", "でっち上げ"),  # not substring -> dropped
+            Statement("s1", 0, "A", "実際の発話"),  # valid ref -> kept
+            Statement("s2", 0, "A", "逐語でない要約"),  # summary -> now kept
             Statement("s3", 9, "A", "実際の"),  # bad utterance ref -> dropped
+            Statement("s4", 0, "A", "   "),  # empty -> dropped
         ),
         relations=(
-            Relation("s1", "s2", "supports", 0.9),  # endpoint dropped -> dropped
+            Relation("s1", "s2", "elaborates", 0.8),  # valid -> kept
             Relation("s1", "s1", "causes", 0.9),  # self loop -> dropped
             Relation("s1", "s9", "supports", 0.5),  # unknown target -> dropped
+            Relation("s1", "s2", "bogus", 0.8),  # bad type -> dropped
         ),
         topics=(Topic("t1", "話題", ("s1", "s99")),),
     )
     v = validate_extraction(ext, utts)
-    assert {s.id for s in v.statements} == {"s1"}
-    assert v.relations == ()
+    assert {s.id for s in v.statements} == {"s1", "s2"}
+    assert {(r.source, r.target, r.type) for r in v.relations} == {
+        ("s1", "s2", "elaborates")
+    }
     assert v.topics[0].statement_ids == ("s1",)
+
+
+def test_build_structure_assigns_topic_ids_from_llm_topics():
+    utts = [_utt(0, "A", "設計の話"), _utt(1, "B", "予算の話")]
+    extraction = DiscourseExtraction(
+        statements=(
+            Statement("s1", 0, "A", "設計の要約"),
+            Statement("s2", 1, "B", "予算の要約"),
+        ),
+        relations=(),
+        topics=(Topic("t1", "設計", ("s1",)), Topic("t2", "予算", ("s2",))),
+    )
+    payload = build_structure(utts, FakeExtractor(extraction))
+    by_id = {s["id"]: s for s in payload["statements"]}
+    assert by_id["s1"]["topic_id"] == "t1"
+    assert by_id["s2"]["topic_id"] == "t2"
+    # every statement lands in a real topic (no その他 fallout)
+    assert all(s["topic_id"] for s in payload["statements"])
 
 
 def test_validate_clamps_confidence():
