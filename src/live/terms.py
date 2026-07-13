@@ -16,12 +16,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from .stopwords import is_content_word
+
 MAX_LENGTH_BONUS_CHARS = 12
 LENGTH_BONUS_PER_CHAR = 0.08
 COMPOUND_BONUS = 1.25
 
 _NOUN_MAJOR = "名詞"
-_EXCLUDED_NOUN_SUBTYPES = {"代名詞", "非自立", "数"}
+# 副詞可能 (adverbial nouns: 今日・少し…) and 接尾 (suffix nouns: ～的・～性
+# as lone morphemes) carry no topical content on their own.
+_EXCLUDED_NOUN_SUBTYPES = {"代名詞", "非自立", "数", "副詞可能", "接尾"}
 
 
 @dataclass(frozen=True)
@@ -42,7 +46,10 @@ class LegacyTermExtractor:
     def extract(self, text: str, limit: int) -> list[Term]:
         from .keywords import extract_keywords  # imported lazily, never modified
 
-        return [Term(k.word, float(k.score)) for k in extract_keywords(text, limit)]
+        terms = [Term(k.word, float(k.score)) for k in extract_keywords(text, limit)]
+        # Post-filter (keywords.py itself is never modified): drop stopwords
+        # and fillers so both extraction paths share the content-word policy.
+        return [t for t in terms if is_content_word(t.word)]
 
 
 class JanomeTermExtractor:
@@ -70,7 +77,8 @@ class JanomeTermExtractor:
             word = "".join(run)
             if word.isascii():
                 word = word.lower()
-            if len(word) > 1:  # drop one-char words / lone symbols
+            # drop one-char words / lone symbols / stopwords / fillers
+            if len(word) > 1 and is_content_word(word):
                 counts[word] = counts.get(word, 0) + 1
                 morpheme_counts[word] = len(run)
             run.clear()

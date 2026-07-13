@@ -29,3 +29,8 @@ transformers>=4.52,<5
 # (src/live/terms.py). Optional: when absent, live mode falls back to the
 # lightweight extractor in src/live/keywords.py with no error.
 janome
+# Claude-based discourse-structure extraction for batch artifacts
+# (src/discourse_llm.py). Optional: when absent — or ANTHROPIC_API_KEY is not
+# set — batch jobs fall back to the deterministic extractor in
+# src/discourse.py with no error.
+anthropic
