@@ -102,6 +102,52 @@
     <script type="application/json" id="structure-data">{{ structure|tojson }}</script>
     {% endif %}
 
+    <script>
+    // Shared topic color scheme, used by every panel (treemap, word network,
+    // keyword lists, logic tree) so a topic keeps one color across the page.
+    // color(topicId) -> palette by topics[] order; wordColor(word) -> the color
+    // of the topic whose source utterances contain that keyword most often.
+    window.detailTopics = (() => {
+        const GRAY = "#8b949e";
+        const PALETTE = ["#1a7f37", "#0969da", "#8250df", "#bf3989", "#d97706", "#0a7ea4", "#cf222e", "#57606a"];
+        const el = document.getElementById("structure-data");
+        if (!el) return { hasStructure: false, palette: PALETTE, color: () => GRAY, wordColor: () => GRAY };
+        const data = JSON.parse(el.textContent);
+        const topics = data.topics || [];
+        const statements = data.statements || [];
+        const utts = new Map((data.utterances || []).map((u) => [u.index, u.text]));
+        const colorById = new Map(topics.map((t, i) => [t.id, PALETTE[i % PALETTE.length]]));
+        const stTopic = new Map();
+        topics.forEach((t) => (t.statement_ids || []).forEach((sid) => {
+            if (!stTopic.has(sid)) stTopic.set(sid, t.id);
+        }));
+        const topicOfStatement = (s) => stTopic.get(s.id) || s.topic_id || null;
+        const cache = new Map();
+        function dominantTopic(word) {
+            const per = new Map();
+            statements.forEach((s) => {
+                const tid = topicOfStatement(s);
+                if (!tid) return;
+                const text = utts.get(s.utterance_index) || s.text || "";
+                if (text.indexOf(word) !== -1) per.set(tid, (per.get(tid) || 0) + 1);
+            });
+            let best = null, bestN = 0;
+            per.forEach((n, tid) => { if (n > bestN) { bestN = n; best = tid; } });
+            return best;
+        }
+        return {
+            hasStructure: topics.length > 0,
+            palette: PALETTE,
+            color: (topicId) => colorById.get(topicId) || GRAY,
+            wordColor: (word) => {
+                if (!cache.has(word)) cache.set(word, dominantTopic(word));
+                const tid = cache.get(word);
+                return tid ? (colorById.get(tid) || GRAY) : GRAY;
+            },
+        };
+    })();
+    </script>
+
     <div class="panel">
         <h2>トピック</h2>
         {% if structure and structure.topics %}
@@ -119,18 +165,16 @@
             const inTopic = new Set();
             const items = topics.map((t) => {
                 (t.statement_ids || []).forEach((id) => inTopic.add(id));
-                return { label: t.label, value: Math.max(1, (t.statement_ids || []).length) };
+                return { id: t.id, label: t.label, value: Math.max(1, (t.statement_ids || []).length) };
             });
             const others = statements.filter((s) => !inTopic.has(s.id)).length;
-            if (others > 0) items.push({ label: "その他", value: others });
+            if (others > 0) items.push({ id: null, label: "その他", value: others });
             items.sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
-            const PALETTE = ["#1a7f37", "#0969da", "#8250df", "#bf3989", "#d97706", "#0a7ea4", "#cf222e", "#57606a"];
-            const colorOf = (label) =>
-                label === "その他" ? "#8b949e" : PALETTE[items.findIndex((it) => it.label === label) % PALETTE.length];
+            const colorOf = (item) => window.detailTopics.color(item.id);
 
             // Deterministic binary-split treemap (alternating direction).
             function split(list, x, y, w, h, horiz) {
-                if (list.length === 1) return [{ label: list[0].label, value: list[0].value, x, y, w, h }];
+                if (list.length === 1) return [{ id: list[0].id, label: list[0].label, value: list[0].value, x, y, w, h }];
                 const total = list.reduce((s, it) => s + it.value, 0);
                 let acc = 0, i = 0;
                 while (i < list.length - 1 && acc + list[i].value < total / 2) { acc += list[i].value; i++; }
@@ -155,7 +199,7 @@
                 ctx.clearRect(0, 0, w, h);
                 if (!items.length) return;
                 split(items.slice(), 0, 0, w, h, true).forEach((r) => {
-                    ctx.fillStyle = colorOf(r.label);
+                    ctx.fillStyle = colorOf(r);
                     ctx.globalAlpha = 0.85;
                     ctx.fillRect(r.x + 1, r.y + 1, Math.max(0, r.w - 2), Math.max(0, r.h - 2));
                     ctx.globalAlpha = 1;
@@ -311,7 +355,9 @@
                     const fade = Math.max(0.35, 1 - age * 0.06); // older words dim out
                     const radius = Math.min(4 + n.weight * 2, 16);
                     graphCtx.globalAlpha = fade;
-                    graphCtx.fillStyle = "#1a7f37";
+                    graphCtx.fillStyle = window.detailTopics.hasStructure
+                        ? window.detailTopics.wordColor(id)
+                        : "#1a7f37";
                     graphCtx.beginPath();
                     graphCtx.arc(n.x, n.y, radius, 0, Math.PI * 2);
                     graphCtx.fill();
@@ -360,7 +406,7 @@
         {% if keywords %}
         <ul>
             {% for kw in keywords[:5] %}
-            <li><span>{{ kw.word }}</span><span class="score">{{ '%.1f'|format(kw.score) }}</span></li>
+            <li><span data-word="{{ kw.word }}">{{ kw.word }}</span><span class="score">{{ '%.1f'|format(kw.score) }}</span></li>
             {% endfor %}
         </ul>
         {% else %}
@@ -370,7 +416,7 @@
         {% if graph and graph.edges %}
         <ul>
             {% for e in (graph.edges|sort(attribute='weight', reverse=true))[:5] %}
-            <li><span>{{ e.a }} — {{ e.b }}</span><span class="score">{{ e.weight }}</span></li>
+            <li><span><span data-word="{{ e.a }}">{{ e.a }}</span> — <span data-word="{{ e.b }}">{{ e.b }}</span></span><span class="score">{{ e.weight }}</span></li>
             {% endfor %}
         </ul>
         {% else %}
@@ -378,6 +424,17 @@
         {% endif %}
     </div>
     </div>
+
+    <script>
+    // Tint keyword + pair text by each word's dominant topic color.
+    (() => {
+        const t = window.detailTopics;
+        if (!t || !t.hasStructure) return;
+        document.querySelectorAll(".kw-side [data-word]").forEach((el) => {
+            el.style.color = t.wordColor(el.dataset.word);
+        });
+    })();
+    </script>
 
     <div class="panel">
         <h2>議論の構造</h2>
@@ -407,10 +464,14 @@
             const ctx = canvas.getContext("2d");
             const tooltip = document.getElementById("structure-tooltip");
 
-            const ROW_H = 42;    // vertical step per statement (grows downward)
-            const TOP = 24;      // top margin for column headers
-            const DOT_X = 16;    // dot offset from its topic column's left edge
+            const GUTTER = 26;   // left rail width for relation connectors
+            const DOT_X = GUTTER + 6;  // dot x — single column, dots stacked
+            const ROW_H = 30;    // height per statement row
+            const HEAD_H = 26;   // height per topic-section header row
+            const GAP = 10;      // gap before each topic section
+            const TOP = 6;
             const NODE_RADIUS = 5;
+            const GRAY = "#8b949e";
             const REL_STYLE = {  // basic straight lines, colored by relation type
                 supports:   "#1a7f37",
                 causes:     "#0969da",
@@ -422,6 +483,8 @@
             const relations = data.relations || [];
             const topics = data.topics || [];
             const uttText = new Map((data.utterances || []).map((u) => [u.index, u.text]));
+            const topicColor = (id) =>
+                (window.detailTopics && id) ? window.detailTopics.color(id) : GRAY;
 
             // Topic membership is reported on topics[].statement_ids (LLM path);
             // statement.topic_id is the secondary source (clustered/fallback
@@ -432,61 +495,71 @@
             }));
             const topicOf = (s) => stTopic.get(s.id) || s.topic_id || null;
 
-            // Lane order: topics as delivered (already deterministic), plus a
-            // trailing "その他" lane only when a statement has no topic at all.
+            // Section order: topics as delivered (deterministic), then a trailing
+            // "その他" only when some statement has no topic at all.
             const laneIds = topics.map((t) => t.id);
-            const laneLabels = topics.map((t) => t.label);
+            const laneLabels = new Map(topics.map((t) => [t.id, t.label]));
             if (statements.some((s) => !topicOf(s))) {
                 laneIds.push(null);
-                laneLabels.push("その他");
+                laneLabels.set(null, "その他");
             }
-            const laneIndex = new Map(laneIds.map((id, i) => [id, i]));
 
-            // Vertical layout: one column per topic (x), one row per statement
-            // in transcript order (y). Height grows with statement count.
-            const numLanes = Math.max(1, laneIds.length);
+            // Single vertical column grouped by topic: each section is a topic
+            // header row followed by its statements as stacked dot+summary rows.
+            // Grows downward as statements accumulate.
             const width = () => canvas.clientWidth || 900;
-            const colWidth = () => width() / numLanes;
-            const height = () => TOP + statements.length * ROW_H + 16;
-            const laneOf = (s) =>
-                laneIndex.has(topicOf(s)) ? laneIndex.get(topicOf(s)) : numLanes - 1;
-
-            const pos = new Map();
+            const pos = new Map();     // statement id -> {x, y, statement}
+            const sections = [];       // {label, color, y} header rows
+            let contentH = TOP;
             function layout() {
-                statements.forEach((s, i) => {
-                    pos.set(s.id, {
-                        x: laneOf(s) * colWidth() + DOT_X,
-                        y: TOP + i * ROW_H + ROW_H / 2,
-                        statement: s,
+                pos.clear();
+                sections.length = 0;
+                let y = TOP;
+                laneIds.forEach((laneId) => {
+                    const members = statements.filter((s) => (topicOf(s) || null) === laneId);
+                    if (!members.length) return;
+                    y += GAP;
+                    sections.push({ label: laneLabels.get(laneId) || "その他", color: topicColor(laneId), y });
+                    y += HEAD_H;
+                    members.forEach((s) => {
+                        pos.set(s.id, { x: DOT_X, y: y + ROW_H / 2, statement: s });
+                        y += ROW_H;
                     });
                 });
+                contentH = y + 12;
             }
+            const height = () => contentH;
 
             function resize() {
+                layout();
                 const dpr = window.devicePixelRatio || 1;
                 canvas.style.height = height() + "px";
                 canvas.width = Math.round(width() * dpr);
                 canvas.height = Math.round(height() * dpr);
                 ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-                layout();
             }
 
-            function arrow(a, b, color, confidence) {
+            function arrow(a, b, color, confidence, railX) {
+                // straight segments only: stub out to the left rail, run
+                // vertically, stub back into the target dot from its left.
                 ctx.strokeStyle = color;
                 ctx.fillStyle = color;
-                ctx.globalAlpha = 0.3 + confidence * 0.55;
+                ctx.globalAlpha = 0.35 + confidence * 0.5;
                 ctx.lineWidth = 1 + confidence;
+                const ax = a.x - NODE_RADIUS;
+                const bx = b.x - NODE_RADIUS;
                 ctx.beginPath();
-                ctx.moveTo(a.x, a.y);
-                ctx.lineTo(b.x, b.y);  // basic straight line
+                ctx.moveTo(ax, a.y);
+                ctx.lineTo(railX, a.y);
+                ctx.lineTo(railX, b.y);
+                ctx.lineTo(bx, b.y);
                 ctx.stroke();
-                // arrowhead at target
-                const angle = Math.atan2(b.y - a.y, b.x - a.x);
+                // arrowhead entering the target dot from the left
                 const size = 6;
                 ctx.beginPath();
-                ctx.moveTo(b.x, b.y);
-                ctx.lineTo(b.x - size * Math.cos(angle - 0.45), b.y - size * Math.sin(angle - 0.45));
-                ctx.lineTo(b.x - size * Math.cos(angle + 0.45), b.y - size * Math.sin(angle + 0.45));
+                ctx.moveTo(bx, b.y);
+                ctx.lineTo(bx - size, b.y - size * 0.5);
+                ctx.lineTo(bx - size, b.y + size * 0.5);
                 ctx.closePath();
                 ctx.fill();
                 ctx.globalAlpha = 1;
@@ -496,33 +569,31 @@
                 const ink = getComputedStyle(document.body).color; // light/dark aware
                 ctx.clearRect(0, 0, width(), height());
 
-                // topic columns: vertical separator + header label at the top
-                ctx.font = "600 11px sans-serif";
+                // topic section headers (row, colored to match the treemap)
                 ctx.textAlign = "left";
-                ctx.textBaseline = "top";
-                laneIds.forEach((id, lane) => {
-                    const left = lane * colWidth();
-                    if (lane > 0) {
-                        ctx.strokeStyle = ink;
-                        ctx.globalAlpha = 0.12;
-                        ctx.lineWidth = 1;
-                        ctx.beginPath();
-                        ctx.moveTo(left, 0);
-                        ctx.lineTo(left, height());
-                        ctx.stroke();
-                        ctx.globalAlpha = 1;
-                    }
-                    ctx.fillStyle = ink;
-                    ctx.globalAlpha = 0.6;
-                    ctx.fillText(laneLabels[lane], left + 6, 5);
+                ctx.textBaseline = "middle";
+                sections.forEach((sec) => {
+                    ctx.strokeStyle = ink;
+                    ctx.globalAlpha = 0.12;
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(0, sec.y + HEAD_H - 4);
+                    ctx.lineTo(width(), sec.y + HEAD_H - 4);
+                    ctx.stroke();
                     ctx.globalAlpha = 1;
+                    ctx.fillStyle = sec.color;
+                    ctx.font = "600 13px sans-serif";
+                    ctx.fillText(sec.label, 4, sec.y + HEAD_H / 2);
                 });
 
-                relations.forEach((r) => {
+                // relations routed through the left rail (staggered so parallel
+                // edges don't perfectly overlap)
+                relations.forEach((r, i) => {
                     const a = pos.get(r.source);
                     const b = pos.get(r.target);
                     if (!a || !b) return;
-                    arrow(a, b, REL_STYLE[r.type] || REL_STYLE.elaborates, r.confidence || 0.5);
+                    const railX = 6 + (i % 3) * 6;
+                    arrow(a, b, REL_STYLE[r.type] || REL_STYLE.elaborates, r.confidence || 0.5, railX);
                 });
 
                 // green dot + summary text to its right (always visible)
@@ -534,13 +605,13 @@
                     ctx.beginPath();
                     ctx.arc(p.x, p.y, hovered ? NODE_RADIUS + 2 : NODE_RADIUS, 0, Math.PI * 2);
                     ctx.fill();
-                    const maxChars = Math.max(4, Math.floor((colWidth() - DOT_X - 20) / 11));
+                    const maxChars = Math.max(6, Math.floor((width() - DOT_X - 24) / 12));
                     const t = p.statement.text || "";
                     const label = t.length > maxChars ? t.slice(0, maxChars - 1) + "…" : t;
                     ctx.fillStyle = ink;
                     ctx.globalAlpha = hovered ? 1 : 0.85;
-                    ctx.font = (hovered ? "600 " : "") + "12px sans-serif";
-                    ctx.fillText(label, p.x + NODE_RADIUS + 5, p.y);
+                    ctx.font = (hovered ? "600 " : "") + "13px sans-serif";
+                    ctx.fillText(label, p.x + NODE_RADIUS + 6, p.y);
                     ctx.globalAlpha = 1;
                 });
             }
