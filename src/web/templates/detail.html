@@ -43,6 +43,17 @@
             break-inside: avoid;
         }
         .keywords .score { color: #999; font-size: 0.75rem; }
+        .kw-row { display: flex; gap: 1rem; align-items: flex-start; }
+        .kw-row .panel { margin-bottom: 1rem; }
+        .kw-network { flex: 2 1 0; min-width: 0; }
+        .kw-side { flex: 1 1 0; min-width: 190px; }
+        .kw-side ul { list-style: none; margin: 0; padding: 0; }
+        .kw-side li { display: flex; justify-content: space-between; gap: 0.5rem; padding: 0.15rem 0; border-bottom: 1px dashed rgba(127,127,127,0.2); font-size: 0.85rem; }
+        .kw-side li span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .kw-side .score { color: #999; font-size: 0.75rem; flex: none; }
+        .kw-side h2 { margin-top: 0.9rem; }
+        .kw-side h2:first-child { margin-top: 0; }
+        @media (max-width: 640px) { .kw-row { flex-direction: column; } }
         .graph-body { position: relative; margin-top: 0.5rem; }
         #graph-canvas { width: 100%; height: 380px; display: block; }
         .structure-body { position: relative; margin-top: 0.5rem; }
@@ -172,20 +183,8 @@
         {% endif %}
     </div>
 
-    <div class="panel keywords">
-        <h2>キーワード</h2>
-        {% if keywords %}
-        <ul>
-            {% for kw in keywords %}
-            <li><span>{{ kw.word }}</span><span class="score">{{ '%.1f'|format(kw.score) }}</span></li>
-            {% endfor %}
-        </ul>
-        {% else %}
-        <p class="none">なし（このジョブは成果物未生成です）</p>
-        {% endif %}
-    </div>
-
-    <div class="panel">
+    <div class="kw-row">
+    <div class="panel kw-network">
         <h2>言葉のネットワーク</h2>
         {% if graph and graph.nodes %}
         <div class="graph-body">
@@ -356,6 +355,30 @@
         {% endif %}
     </div>
 
+    <div class="panel kw-side">
+        <h2>キーワード</h2>
+        {% if keywords %}
+        <ul>
+            {% for kw in keywords[:5] %}
+            <li><span>{{ kw.word }}</span><span class="score">{{ '%.1f'|format(kw.score) }}</span></li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p class="none">なし</p>
+        {% endif %}
+        <h2>強いつながり</h2>
+        {% if graph and graph.edges %}
+        <ul>
+            {% for e in (graph.edges|sort(attribute='weight', reverse=true))[:5] %}
+            <li><span>{{ e.a }} — {{ e.b }}</span><span class="score">{{ e.weight }}</span></li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p class="none">なし</p>
+        {% endif %}
+    </div>
+    </div>
+
     <div class="panel">
         <h2>議論の構造</h2>
         {% if structure and structure.statements %}
@@ -384,20 +407,21 @@
             const ctx = canvas.getContext("2d");
             const tooltip = document.getElementById("structure-tooltip");
 
-            const LANE_HEIGHT = 96;
-            const MARGIN_X = 56;
-            const LANE_LABEL_GAP = 14;
+            const ROW_H = 42;    // vertical step per statement (grows downward)
+            const TOP = 24;      // top margin for column headers
+            const DOT_X = 16;    // dot offset from its topic column's left edge
             const NODE_RADIUS = 5;
-            const REL_STYLE = {
-                supports:   { color: "#1a7f37", dash: [] },
-                causes:     { color: "#0969da", dash: [] },
-                elaborates: { color: "#8b949e", dash: [2, 3] },
-                contrasts:  { color: "#d97706", dash: [7, 4] },
+            const REL_STYLE = {  // basic straight lines, colored by relation type
+                supports:   "#1a7f37",
+                causes:     "#0969da",
+                elaborates: "#8b949e",
+                contrasts:  "#d97706",
             };
 
             const statements = data.statements || [];
             const relations = data.relations || [];
             const topics = data.topics || [];
+            const uttText = new Map((data.utterances || []).map((u) => [u.index, u.text]));
 
             // Topic membership is reported on topics[].statement_ids (LLM path);
             // statement.topic_id is the secondary source (clustered/fallback
@@ -418,19 +442,25 @@
             }
             const laneIndex = new Map(laneIds.map((id, i) => [id, i]));
 
+            // Vertical layout: one column per topic (x), one row per statement
+            // in transcript order (y). Height grows with statement count.
+            const numLanes = Math.max(1, laneIds.length);
             const width = () => canvas.clientWidth || 900;
-            const height = () => laneIds.length * LANE_HEIGHT + 20;
+            const colWidth = () => width() / numLanes;
+            const height = () => TOP + statements.length * ROW_H + 16;
+            const laneOf = (s) =>
+                laneIndex.has(topicOf(s)) ? laneIndex.get(topicOf(s)) : numLanes - 1;
 
-            // x: shared time axis by statement order; y: lane center with a
-            // deterministic 3-step vertical offset to reduce label overlap.
             const pos = new Map();
-            statements.forEach((s, i) => {
-                const lane = laneIndex.has(topicOf(s)) ? laneIndex.get(topicOf(s)) : laneIds.length - 1;
-                const denom = Math.max(1, statements.length - 1);
-                const x = MARGIN_X + (i / denom) * (width() - MARGIN_X - 24);
-                const y = lane * LANE_HEIGHT + LANE_HEIGHT / 2 + ((i % 3) - 1) * 14;
-                pos.set(s.id, { x, y, statement: s });
-            });
+            function layout() {
+                statements.forEach((s, i) => {
+                    pos.set(s.id, {
+                        x: laneOf(s) * colWidth() + DOT_X,
+                        y: TOP + i * ROW_H + ROW_H / 2,
+                        statement: s,
+                    });
+                });
+            }
 
             function resize() {
                 const dpr = window.devicePixelRatio || 1;
@@ -438,29 +468,20 @@
                 canvas.width = Math.round(width() * dpr);
                 canvas.height = Math.round(height() * dpr);
                 ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-                // recompute x positions for the new width
-                statements.forEach((s, i) => {
-                    const p = pos.get(s.id);
-                    const denom = Math.max(1, statements.length - 1);
-                    p.x = MARGIN_X + (i / denom) * (width() - MARGIN_X - 24);
-                });
+                layout();
             }
 
-            function arrow(a, b, style, confidence) {
-                ctx.strokeStyle = style.color;
-                ctx.fillStyle = style.color;
-                ctx.globalAlpha = 0.35 + confidence * 0.55;
+            function arrow(a, b, color, confidence) {
+                ctx.strokeStyle = color;
+                ctx.fillStyle = color;
+                ctx.globalAlpha = 0.3 + confidence * 0.55;
                 ctx.lineWidth = 1 + confidence;
-                ctx.setLineDash(style.dash);
-                const mx = (a.x + b.x) / 2;
-                const my = (a.y + b.y) / 2 - (a.y === b.y ? 26 : 0); // arc same-lane edges
                 ctx.beginPath();
                 ctx.moveTo(a.x, a.y);
-                ctx.quadraticCurveTo(mx, my, b.x, b.y);
+                ctx.lineTo(b.x, b.y);  // basic straight line
                 ctx.stroke();
-                ctx.setLineDash([]);
-                // arrowhead at target, oriented along the curve end tangent
-                const angle = Math.atan2(b.y - my, b.x - mx);
+                // arrowhead at target
+                const angle = Math.atan2(b.y - a.y, b.x - a.x);
                 const size = 6;
                 ctx.beginPath();
                 ctx.moveTo(b.x, b.y);
@@ -475,25 +496,25 @@
                 const ink = getComputedStyle(document.body).color; // light/dark aware
                 ctx.clearRect(0, 0, width(), height());
 
-                // lane separators + labels
+                // topic columns: vertical separator + header label at the top
                 ctx.font = "600 11px sans-serif";
                 ctx.textAlign = "left";
                 ctx.textBaseline = "top";
                 laneIds.forEach((id, lane) => {
-                    const top = lane * LANE_HEIGHT;
+                    const left = lane * colWidth();
                     if (lane > 0) {
                         ctx.strokeStyle = ink;
                         ctx.globalAlpha = 0.12;
                         ctx.lineWidth = 1;
                         ctx.beginPath();
-                        ctx.moveTo(0, top);
-                        ctx.lineTo(width(), top);
+                        ctx.moveTo(left, 0);
+                        ctx.lineTo(left, height());
                         ctx.stroke();
                         ctx.globalAlpha = 1;
                     }
                     ctx.fillStyle = ink;
-                    ctx.globalAlpha = 0.55;
-                    ctx.fillText(laneLabels[lane], 8, top + LANE_LABEL_GAP - 8);
+                    ctx.globalAlpha = 0.6;
+                    ctx.fillText(laneLabels[lane], left + 6, 5);
                     ctx.globalAlpha = 1;
                 });
 
@@ -504,26 +525,23 @@
                     arrow(a, b, REL_STYLE[r.type] || REL_STYLE.elaborates, r.confidence || 0.5);
                 });
 
-                const dense = statements.length > 1
-                    && (width() - MARGIN_X) / statements.length < 46;
-                ctx.textAlign = "center";
-                ctx.textBaseline = "bottom";
+                // green dot + summary text to its right (always visible)
+                ctx.textAlign = "left";
+                ctx.textBaseline = "middle";
                 pos.forEach((p, id) => {
                     const hovered = id === hoverId;
                     ctx.fillStyle = hovered ? "#d4a72c" : "#1a7f37";
                     ctx.beginPath();
                     ctx.arc(p.x, p.y, hovered ? NODE_RADIUS + 2 : NODE_RADIUS, 0, Math.PI * 2);
                     ctx.fill();
-                    if (!dense || hovered) {
-                        const label = p.statement.text.length > 18
-                            ? p.statement.text.slice(0, 18) + "…"
-                            : p.statement.text;
-                        ctx.fillStyle = ink;
-                        ctx.globalAlpha = hovered ? 1 : 0.8;
-                        ctx.font = (hovered ? "600 " : "") + "11px sans-serif";
-                        ctx.fillText(label, p.x, p.y - NODE_RADIUS - 3);
-                        ctx.globalAlpha = 1;
-                    }
+                    const maxChars = Math.max(4, Math.floor((colWidth() - DOT_X - 20) / 11));
+                    const t = p.statement.text || "";
+                    const label = t.length > maxChars ? t.slice(0, maxChars - 1) + "…" : t;
+                    ctx.fillStyle = ink;
+                    ctx.globalAlpha = hovered ? 1 : 0.85;
+                    ctx.font = (hovered ? "600 " : "") + "12px sans-serif";
+                    ctx.fillText(label, p.x + NODE_RADIUS + 5, p.y);
+                    ctx.globalAlpha = 1;
                 });
             }
 
@@ -558,7 +576,8 @@
                 draw(id);
                 if (id) {
                     const p = pos.get(id);
-                    const lines = [`[${p.statement.speaker || "?"}] ${p.statement.text}`]
+                    const full = uttText.get(p.statement.utterance_index) || p.statement.text;
+                    const lines = [`[${p.statement.speaker || "?"}] ${full}`]
                         .concat(relationSummary(id));
                     tooltip.textContent = lines.join("\n");
                     tooltip.style.left = Math.min(x + 14, width() - 200) + "px";
