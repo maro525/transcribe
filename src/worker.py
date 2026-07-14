@@ -39,7 +39,14 @@ def run() -> None:
         print("Using device:", device)
         print("Base dir:", config.BASE_DIR)
 
-        whisper_model = get_whisper_model(config.WHISPER_MODEL)
+        resolved = config.resolve_whisper_model(
+            explicit_model=config.WHISPER_MODEL,
+            mode=config.BATCH_WHISPER_MODE,
+            cuda_available=device == "cuda",
+        )
+        print(f"Whisper model: {resolved.name} ({resolved.reason})")
+
+        whisper_model = get_whisper_model(resolved.name)
         diarization_pipeline = get_diarization_pipeline(
             hf_token=hf_token,
             cache_dir=config.CACHE_DIR,
@@ -48,7 +55,7 @@ def run() -> None:
         )
         audio_cropper = get_audio_cropper(config.SAMPLE_RATE)
         store.set_system_message(
-            f"ready (device: {device}, whisper: {config.WHISPER_MODEL})"
+            f"ready (device: {device}, whisper: {resolved.name} — {resolved.reason})"
         )
     except Exception as error:
         store.set_system_message(f"startup failed: {error}")

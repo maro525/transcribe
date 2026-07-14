@@ -1,4 +1,5 @@
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 BASE_DIR = Path(os.environ.get("TRANSCRIBE_BASE_DIR", ".")).expanduser().resolve()
@@ -9,7 +10,72 @@ TEMP_DIR = BASE_DIR / "tmp_audio"
 CACHE_DIR = BASE_DIR / "model_cache"
 ENV_FILE = Path(os.environ.get("TRANSCRIBE_ENV_FILE", BASE_DIR / ".env"))
 
-WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "medium")
+# --- Batch whisper model selection ------------------------------------------
+# WHISPER_MODEL (explicit, unchanged contract) always wins. It is read raw here
+# (no "medium" default) so the resolver can distinguish "unset" from an explicit
+# choice. When unset, BATCH_WHISPER_MODE selects a hardware-aware tier: light
+# keeps the historical `medium`; strong/max opt GPU hosts into larger models and
+# degrade back to `medium` on non-CUDA hosts. Resolution runs at worker startup
+# (see resolve_whisper_model), so this module stays torch-free.
+WHISPER_MODEL = os.environ.get("WHISPER_MODEL")
+BATCH_WHISPER_MODE = os.environ.get("BATCH_WHISPER_MODE", "light")
+
+BATCH_MODEL_LIGHT = "medium"
+BATCH_MODEL_STRONG = "large-v3-turbo"
+BATCH_MODEL_MAX = "large-v3"
+
+
+@dataclass(frozen=True)
+class ResolvedWhisperModel:
+    """Resolved batch model name plus the reason it was chosen (for the log)."""
+
+    name: str
+    reason: str
+
+
+def resolve_whisper_model(
+    *,
+    explicit_model: str | None,
+    mode: str | None,
+    cuda_available: bool,
+) -> ResolvedWhisperModel:
+    """Resolve the batch whisper model deterministically (pure function).
+
+    Explicit-first: a non-empty WHISPER_MODEL always wins and the mode is never
+    validated in that case. When WHISPER_MODEL is unset, BATCH_WHISPER_MODE
+    picks the tier; strong/max degrade to the light model on non-CUDA hosts. An
+    unrecognised mode raises ValueError so startup fails fast (mirrors the live
+    engine's invalid-LIVE_ENGINE handling). Empty/whitespace values count as
+    unset for the model and as `light` for the mode.
+    """
+    explicit = (explicit_model or "").strip()
+    if explicit:
+        return ResolvedWhisperModel(name=explicit, reason="explicit WHISPER_MODEL")
+
+    normalized = (mode or "light").strip().lower() or "light"
+    if normalized == "light":
+        return ResolvedWhisperModel(
+            name=BATCH_MODEL_LIGHT, reason="BATCH_WHISPER_MODE=light"
+        )
+    if normalized in ("strong", "max"):
+        target = BATCH_MODEL_STRONG if normalized == "strong" else BATCH_MODEL_MAX
+        if cuda_available:
+            return ResolvedWhisperModel(
+                name=target,
+                reason=f"BATCH_WHISPER_MODE={normalized}, CUDA available",
+            )
+        return ResolvedWhisperModel(
+            name=BATCH_MODEL_LIGHT,
+            reason=(
+                f"BATCH_WHISPER_MODE={normalized} requested but CUDA unavailable "
+                f"— using {BATCH_MODEL_LIGHT}"
+            ),
+        )
+    raise ValueError(
+        f"invalid BATCH_WHISPER_MODE={normalized!r} (expected light|strong|max)"
+    )
+
+
 DIARIZATION_MODEL = "pyannote/speaker-diarization-3.1"
 NUM_SPEAKERS = int(os.environ.get("NUM_SPEAKERS", "2"))
 
