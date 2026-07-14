@@ -4,7 +4,7 @@
 - linear_id: NSKETCH-885
 - tier: M
 - created: 2026-07-15
-- status: implementing
+- status: completed
 
 ## Brief
 - **Current State**: Batch pipeline is diarization-first: pyannote turns → per-turn audio crop → per-crop whisper decode (`src/transcriber.py`). Turn-boundary crops truncate words, lose cross-turn context, and decode N times. NSKETCH-883 already made the model tier GPU-aware (`BATCH_WHISPER_MODE`, strong=large-v3-turbo).
@@ -28,6 +28,7 @@
 - `[startproject] POST` — Plan complete; Linear comment posted to NSKETCH-885.
 - `[team-implement] POST` — 2026-07-15 実装完了。align.py / transcriber.py / config.py / tests/test_align.py / README を変更。worker・artifacts・formatter・discourse 不変。py_compile OK、test_align 29/29、全体スイート 174/174（既存 145 回帰なし）。ブランチ feature/nsketch-885-asr-first-batch。Linear コメント投稿済み。
 - `[team-review] POST` — 2026-07-15 判定 PASS。4観点レビュー（Claude / Security手動 / Simplify手動；OpenCodeは過去ハング実績によりスキップ）。align.py 純粋アルゴリズムを Design ケースマトリクスに照合し正当性確認。契約保全確認。test_align 29/29、全体 174/174 回帰なし、py_compile OK。critical/major ゼロ。minor 申し送りは Review 節参照。精度検証はユーザーフォローアップ。
+- `[deploy] POST` — 2026-07-15 デプロイ完了。コミット 7cb3d86 + a672a62 (Merge PR #13)。Linear NSKETCH-885 を In Review に更新、デプロイコメント投稿。タスクファイル Deploy 節記入・status=completed。
 
 ## Design
 
@@ -115,4 +116,53 @@
 - 精度・タイムスタンプ品質の実音声検証はユーザーフォローアップ（GPU/音声なし環境）。
 
 ## Deploy
-<!-- deploy が記入 -->
+
+### デプロイ結果: SUCCESS
+
+### 実行内容
+- デプロイ日時: 2026-07-15 16:00 JST
+- コミット: a672a62 (Merge pull request #13 from hidemaro-nsketch/feature/nsketch-885-asr-first-batch)
+- 実装コミット: 7cb3d86 feat(transcriber): ASR-first batch transcription with word-to-speaker alignment
+- PR: https://github.com/hidemaro-nsketch/transcribe/pull/13 (マージ済み)
+
+### 変更ファイル確認
+- src/align.py — 新規: Word, Turn, TranscriptSegment, words_from_whisper_result, assign_words_to_turns
+- src/transcriber.py — ASR-first に書き換え、TranscriptSegment 再エクスポート
+- src/config.py — BATCH_CONDITION_ON_PREVIOUS_TEXT 追加
+- tests/test_align.py — 新規: 29 ユニットテスト
+- README.md — パイプライン説明・ディレクトリ構成・env 表を更新
+- 不変確認: worker.py, artifacts.py, formatter.py, discourse (git diff で確認)
+
+### デプロイ後検証結果
+
+#### テスト
+- 実行: 全体スイート 174/174 PASS
+  - 既存 145 テスト: 回帰なし
+  - 新規 29 テスト (test_align.py): すべてクリーン
+- py_compile: src/align.py, src/transcriber.py, src/config.py, tests/test_align.py すべて OK
+
+#### 契約保全確認
+- diarize_and_transcribe シグネチャ不変 ✅
+- TranscriptSegment 再エクスポート で formatter.py 無変更 ✅
+- worker.py, artifacts.py, formatter.py, discourse に触れていない ✅
+
+### Linear 更新
+- NSKETCH-885 ステータス: In Progress → **In Review** ✅
+- デプロイコメント投稿 ✅
+
+### 申し送り事項
+
+#### 重要な注記
+**実音声 / GPU での精度・タイムスタンプ品質検証はユーザーの必須フォローアップ**
+
+開発環境に GPU/音声/モデルなし。純粋ロジック + ユニットテスト + 全体スイート無退行で検証済み。
+
+#### Minor follow-up items
+1. **0.3 秒未満ターンの単語再付着による話者誤帰属の可能性**
+   - 旧実装（短ターン削除）はテキスト消失
+   - 新実装（隣接ターンに再付着）はテキスト保全だが誤帰属リスク
+   - 設計上の明示的トレードオフ (PR に記載)
+
+2. **ダッシュボード進捗の粒度低下**
+   - segments_completed が復号完了時に 0→N にジャンプ
+   - worker.py 不変維持のため許容 (PR に記載)
