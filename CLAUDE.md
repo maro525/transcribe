@@ -1,19 +1,18 @@
-# Current Project: NSKETCH-883 — Batch strong/accuracy mode (openai-whisper)
+# Current Project: NSKETCH-885 — ASR-first batch transcription (whisperX-style)
 
 ## Goal
-- GPU hosts opt into stronger batch models via BATCH_WHISPER_MODE (strong=large-v3-turbo, max=large-v3); CPU hosts keep medium. WHISPER_MODEL explicit override always wins.
+- Batch pipeline: one whole-file whisper pass (word_timestamps=True, ja) + whole-file pyannote diarization; pure word→turn max-overlap assignment + same-speaker grouping (no-space join). Public contract (list[TranscriptSegment] + on_segment time order) unchanged.
 
 ## Key files
-- `src/config.py` — raw env reads + pure `resolve_whisper_model()` (stdlib-only, torch-free).
-- `src/worker.py` — startup resolution, `ready (device, whisper, reason)` log.
-- `tests/test_batch_model_select.py` — pure resolver matrix, no torch/GPU/downloads.
+- `src/align.py` — stdlib-only pure alignment: Word/Turn/TranscriptSegment, words_from_whisper_result, assign_words_to_turns.
+- `src/transcriber.py` — whole-file decode + diarization + alignment; re-exports TranscriptSegment; signature unchanged (audio_cropper unused).
+- `tests/test_align.py` — pure alignment matrix, no torch/GPU/audio.
 
 ## Architecture
-- Resolution at worker startup (not config import); CUDA passed as parameter to keep the resolver pure.
-- Mirrors the live-engine selection pattern (`src/live/engine.py` / `tests/test_engine_select.py`).
+- ASR-first (whisperX-style); assignment: max overlap → min gap → earliest turn; min_segment_seconds now drops short *turns* pre-assignment (words re-attach to neighbors).
+- worker.py / artifacts.py / formatter.py / discourse untouched; BATCH_WHISPER_MODE resolution (NSKETCH-883) untouched.
 
 ## Decisions
-- New env `BATCH_WHISPER_MODE=light|strong|max` (default light); no `WHISPER_MODEL=auto` sentinel.
-- CPU + strong/max → fall back to medium with logged reason; never force heavy on CPU.
-- Invalid mode → ValueError at startup (fail-fast, matches LIVE_ENGINE handling).
-- Scope: batch only; openai-whisper stays the engine; #2 ASR-first architecture excluded.
+- Word-level granularity; condition_on_previous_text=False default + BATCH_CONDITION_ON_PREVIOUS_TEXT knob.
+- on_segment emitted post-alignment in time order (no incremental emission).
+- NaN/inf words dropped, reversed timestamps clamped (never fail the job); empty diarization → SPEAKER_00.

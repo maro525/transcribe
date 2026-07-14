@@ -24,6 +24,15 @@ BATCH_MODEL_LIGHT = "medium"
 BATCH_MODEL_STRONG = "large-v3-turbo"
 BATCH_MODEL_MAX = "large-v3"
 
+# ASR-first batch decode (NSKETCH-885): the whole-file whisper pass conditions
+# each window on the previous window's text only when this is enabled. Default
+# off — condition_on_previous_text=True risks whisper repetition loops on long
+# Japanese meetings. Parsed like DISCOURSE_ENABLED (any value other than
+# 0/false/empty enables it).
+BATCH_CONDITION_ON_PREVIOUS_TEXT = os.environ.get(
+    "BATCH_CONDITION_ON_PREVIOUS_TEXT", "0"
+) not in ("0", "false", "")
+
 
 @dataclass(frozen=True)
 class ResolvedWhisperModel:
