@@ -1,24 +1,19 @@
-# Current Project: NSKETCH-732 — SSE realtime dashboard planning
+# Current Project: NSKETCH-883 — Batch strong/accuracy mode (openai-whisper)
 
 ## Goal
-- Replace the dashboard's primary 2-second `/jobs` polling path with Server-Sent Events while keeping a safe fallback.
+- GPU hosts opt into stronger batch models via BATCH_WHISPER_MODE (strong=large-v3-turbo, max=large-v3); CPU hosts keep medium. WHISPER_MODEL explicit override always wins.
 
 ## Key files
-- `src/web/app.py` — FastAPI routes; add planned `/events` endpoint here.
-- `src/web/templates/index.html` — current htmx polling entry point; planned native `EventSource` frontend lives here unless static assets are introduced.
-- `src/web/templates/_jobs.html` — existing jobs partial retained for fallback/debug.
-- `src/status.py` — in-memory `StatusStore`; planned source of truth plus publish/subscribe notifications.
-- `src/worker.py` — synchronous worker thread that updates store on discover, processing, segment, done, and error.
+- `src/config.py` — raw env reads + pure `resolve_whisper_model()` (stdlib-only, torch-free).
+- `src/worker.py` — startup resolution, `ready (device, whisper, reason)` log.
+- `tests/test_batch_model_select.py` — pure resolver matrix, no torch/GPU/downloads.
 
 ## Architecture
-- Use native browser `EventSource` with FastAPI `StreamingResponse`.
-- Preserve synchronous worker thread and in-memory state.
-- Add per-client, thread-safe subscriber queues around `StatusStore` mutations.
-- Send an initial `snapshot` on every SSE connection/reconnection, then incremental job/system events and heartbeat.
-- Keep `/jobs` and transcript partial routes for fallback and compatibility.
+- Resolution at worker startup (not config import); CUDA passed as parameter to keep the resolver pure.
+- Mirrors the live-engine selection pattern (`src/live/engine.py` / `tests/test_engine_select.py`).
 
 ## Decisions
-- No new dependency for SSE unless native formatting proves insufficient.
-- Prefer snapshot-based reconnect recovery over durable `Last-Event-ID` replay.
-- Use `/jobs` polling only as fallback when SSE is unsupported or repeatedly fails.
-- Keep htmx for transcript partial loading; do not adopt htmx SSE extension for v1.
+- New env `BATCH_WHISPER_MODE=light|strong|max` (default light); no `WHISPER_MODEL=auto` sentinel.
+- CPU + strong/max → fall back to medium with logged reason; never force heavy on CPU.
+- Invalid mode → ValueError at startup (fail-fast, matches LIVE_ENGINE handling).
+- Scope: batch only; openai-whisper stays the engine; #2 ASR-first architecture excluded.

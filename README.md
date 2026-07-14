@@ -163,7 +163,8 @@ python main.py
 | 変数名 | デフォルト | 説明 |
 | --- | --- | --- |
 | `HF_TOKEN` | （必須） | pyannote 用の HuggingFace アクセストークン |
-| `WHISPER_MODEL` | `medium` | 使用する Whisper モデルサイズ |
+| `WHISPER_MODEL` | （未設定） | 使用する Whisper モデルを明示指定（例 `medium` / `large-v3`）。設定時は常に優先され `BATCH_WHISPER_MODE` を無視。未設定時は `BATCH_WHISPER_MODE` に従う（既定 `medium`） |
+| `BATCH_WHISPER_MODE` | `light` | バッチのモデル階層。`light`=`medium`（既定）/ `strong`=`large-v3-turbo` / `max`=`large-v3`。`strong`/`max` は GPU オプトイン。CUDA 非搭載ホストでは `medium` にフォールバックし、起動ログに理由を表示。`WHISPER_MODEL` 未設定時のみ参照 |
 | `NUM_SPEAKERS` | `2` | 話者分離で想定する話者数 |
 | `WEB_HOST` | `127.0.0.1` | ダッシュボードのバインドホスト |
 | `WEB_PORT` | `8000` | ダッシュボードのポート |
