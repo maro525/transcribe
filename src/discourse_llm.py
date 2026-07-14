@@ -38,8 +38,18 @@ from typing import Any
 
 from . import config
 from .discourse import (
+    ARG_STANCE,
+    Argument,
+    DecisionFlow,
     DiscourseExtraction,
+    FLOW_CONFIDENCE,
     FallbackRelationExtractor,
+    OPTION_STATUS,
+    OUTCOME_KIND,
+    OUTCOME_STATUS,
+    Option,
+    Outcome,
+    Question,
     RELATION_TYPES,
     Relation,
     Statement,
@@ -95,6 +105,109 @@ EXTRACTION_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
             },
         },
+        # Optional decision-flow layer (D1). NOT in the top-level "required"
+        # list, so a response that omits it still validates. Every nested
+        # object is closed; nullable scalars use ["string","null"]; ranges are
+        # avoided (confidence is an enum). Cross-reference integrity is checked
+        # client-side in discourse.validate_decision_flows (fail-soft).
+        "decision_flows": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "topic_id": {"type": "string"},
+                    "questions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "summary": {"type": "string"},
+                                "statement_id": {"type": ["string", "null"]},
+                            },
+                            "required": ["id", "summary", "statement_id"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "options": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "label": {"type": "string"},
+                                "summary": {"type": "string"},
+                                "statement_ids": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "introduced_by": {"type": ["string", "null"]},
+                                "status": {"type": "string", "enum": list(OPTION_STATUS)},
+                            },
+                            "required": [
+                                "id",
+                                "label",
+                                "summary",
+                                "statement_ids",
+                                "introduced_by",
+                                "status",
+                            ],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "arguments": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "statement_id": {"type": "string"},
+                                "option_id": {"type": "string"},
+                                "stance": {"type": "string", "enum": list(ARG_STANCE)},
+                            },
+                            "required": ["id", "statement_id", "option_id", "stance"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "outcome": {
+                        "type": "object",
+                        "properties": {
+                            "status": {"type": "string", "enum": list(OUTCOME_STATUS)},
+                            "kind": {"type": "string", "enum": list(OUTCOME_KIND)},
+                            "summary": {"type": "string"},
+                            "statement_id": {"type": ["string", "null"]},
+                            "selected_option_ids": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "rationale_statement_ids": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                        "required": [
+                            "status",
+                            "kind",
+                            "summary",
+                            "statement_id",
+                            "selected_option_ids",
+                            "rationale_statement_ids",
+                        ],
+                        "additionalProperties": False,
+                    },
+                    "confidence": {"type": "string", "enum": list(FLOW_CONFIDENCE)},
+                },
+                "required": [
+                    "topic_id",
+                    "questions",
+                    "options",
+                    "arguments",
+                    "outcome",
+                    "confidence",
+                ],
+                "additionalProperties": False,
+            },
+        },
     },
     "required": ["statements", "relations", "topics"],
     "additionalProperties": False,
@@ -120,6 +233,18 @@ statement の text はその論点を凝縮した**短い要約**(10〜20字程�
 受け皿は作らず、内容の近い statement をまとめること。label は短い日本語名詞句、\
 summary はその話題で何が話し合われたかを 1 文(40〜60字程度)にまとめた要約、\
 statement_ids は所属 statement の id 列。1 つの statement は 1 つの topic のみに属する。
+4. **決定を要する話題についてのみ** decision_flows を抽出する(任意)。中心的な問い(question)、\
+競合する選択肢(option)、各選択肢への賛否(argument)、収束(outcome)を、既出の statement id を\
+参照して構成する。原則:
+   - **不確実なら省略する**。すべての話題を無理に決定の形にしない(情報共有だけの話題は出さない)。
+   - option は実際に提案された案・候補のみ。数は少なめを優先し、投機的な選択肢を作らない。
+   - option.introduced_by はその案が最初に現れた statement id、statement_ids は関連する id 列。
+   - argument.stance は pro/con/neutral。option_id で対象の option を指す。
+   - outcome.status は decided(決定)/deferred(明示的な先送りのみ)/open(未決)。\
+kind は single_option/hybrid(複数採用)/no_option/unknown。decided かつ single_option は\
+selected_option_ids をちょうど 1 つ、hybrid は 2 つ以上にする。
+   - option.status は selected/rejected/abandoned/unresolved/partial。
+   - 参照する statement id は必ず手順 1 で出力済みのものを使う。確信のない関係・決定は出さない。
 
 出力は指定スキーマの JSON のみ。会話にない内容を創作しないこと。"""
 
@@ -236,7 +361,88 @@ def _parse_extraction(data: Any) -> DiscourseExtraction:
         for item in data["topics"]
     )
     return DiscourseExtraction(
-        statements=statements, relations=relations, topics=topics
+        statements=statements,
+        relations=relations,
+        topics=topics,
+        decision_flows=_parse_decision_flows(data),
+    )
+
+
+def _opt_str(value: Any) -> str | None:
+    return None if value is None else str(value)
+
+
+def _parse_decision_flows(data: dict[str, Any]) -> tuple[DecisionFlow, ...]:
+    """Tolerant, isolated parse of the optional decision-flow layer.
+
+    Never raises: a malformed flow is skipped so it can't take down the base
+    extraction (statements/relations/topics). Cross-reference/enum integrity is
+    enforced later by discourse.validate_decision_flows (drops bad flows)."""
+    raw = data.get("decision_flows")
+    if not isinstance(raw, list):
+        return ()
+    flows: list[DecisionFlow] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            flows.append(_parse_one_flow(item))
+        except Exception:  # malformed flow -> drop, keep the rest
+            continue
+    return tuple(flows)
+
+
+def _parse_one_flow(item: dict[str, Any]) -> DecisionFlow:
+    questions = tuple(
+        Question(
+            id=str(q["id"]),
+            summary=str(q.get("summary", "")),
+            statement_id=_opt_str(q.get("statement_id")),
+        )
+        for q in item.get("questions", []) or []
+    )
+    options = tuple(
+        Option(
+            id=str(o["id"]),
+            label=str(o.get("label", "")),
+            summary=str(o.get("summary", "")),
+            statement_ids=tuple(str(s) for s in o.get("statement_ids", []) or []),
+            introduced_by=_opt_str(o.get("introduced_by")),
+            status=str(o.get("status", "unresolved")),
+        )
+        for o in item.get("options", []) or []
+    )
+    arguments = tuple(
+        Argument(
+            id=str(a["id"]),
+            statement_id=str(a.get("statement_id", "")),
+            option_id=str(a.get("option_id", "")),
+            stance=str(a.get("stance", "neutral")),
+        )
+        for a in item.get("arguments", []) or []
+    )
+    outcome_data = item.get("outcome")
+    outcome = None
+    if isinstance(outcome_data, dict):
+        outcome = Outcome(
+            status=str(outcome_data.get("status", "open")),
+            kind=str(outcome_data.get("kind", "unknown")),
+            summary=str(outcome_data.get("summary", "")),
+            statement_id=_opt_str(outcome_data.get("statement_id")),
+            selected_option_ids=tuple(
+                str(x) for x in outcome_data.get("selected_option_ids", []) or []
+            ),
+            rationale_statement_ids=tuple(
+                str(x) for x in outcome_data.get("rationale_statement_ids", []) or []
+            ),
+        )
+    return DecisionFlow(
+        topic_id=str(item.get("topic_id", "")),
+        questions=questions,
+        options=options,
+        arguments=arguments,
+        outcome=outcome,
+        confidence=str(item.get("confidence", "medium")),
     )
 
 

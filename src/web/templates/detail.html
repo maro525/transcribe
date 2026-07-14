@@ -57,7 +57,6 @@
         .graph-body { position: relative; margin-top: 0.5rem; }
         #graph-canvas { width: 100%; height: 380px; display: block; }
         .structure-body { position: relative; margin-top: 0.5rem; }
-        #structure-canvas { width: 100%; display: block; }
         #topics-canvas { width: 100%; display: block; }
         .structure-note { color: #999; font-size: 0.72rem; margin: 0.4rem 0 0; }
         .structure-legend {
@@ -71,12 +70,37 @@
             vertical-align: middle;
         }
         #structure-tooltip {
-            position: absolute; display: none; max-width: 340px;
+            position: fixed; display: none; max-width: 340px;
             padding: 0.45rem 0.6rem; font-size: 0.75rem; line-height: 1.4;
             background: rgba(30,30,30,0.94); color: #eee;
-            border-radius: 4px; pointer-events: none; z-index: 5;
+            border-radius: 4px; pointer-events: none; z-index: 20;
             white-space: pre-wrap; word-break: break-word;
         }
+        /* Decision-flow multi-view switcher (NSKETCH-873) */
+        .df-section { margin: 0.2rem 0 1.1rem; }
+        .df-section:last-child { margin-bottom: 0; }
+        .df-head {
+            display: flex; flex-wrap: wrap; align-items: baseline;
+            gap: 0.4rem 0.6rem; margin: 0 0 0.35rem;
+        }
+        .df-title { font-weight: 600; font-size: 0.9rem; }
+        .df-summary { color: #888; font-size: 0.78rem; flex: 1 1 12rem; min-width: 0; }
+        .df-switch { display: flex; flex-wrap: wrap; gap: 0.25rem; margin: 0.1rem 0 0.35rem; }
+        .df-switch button {
+            font: inherit; font-size: 0.72rem; line-height: 1;
+            padding: 0.28rem 0.55rem; cursor: pointer;
+            color: inherit; background: rgba(127,127,127,0.10);
+            border: 1px solid rgba(127,127,127,0.28); border-radius: 999px;
+        }
+        .df-switch button:hover { background: rgba(127,127,127,0.20); }
+        .df-switch button[aria-pressed="true"] {
+            background: rgba(9,105,218,0.16); border-color: rgba(9,105,218,0.5);
+            font-weight: 600;
+        }
+        .df-canvas-wrap { position: relative; }
+        .df-canvas-wrap canvas { width: 100%; display: block; }
+        .df-note { color: #999; font-size: 0.74rem; margin: 0.35rem 0 0; }
+        .df-conf { font-size: 0.68rem; color: #999; }
         pre.transcript {
             white-space: pre-wrap;
             background: rgba(127,127,127,0.08);
@@ -439,278 +463,685 @@
     <div class="panel">
         <h2>議論の構造</h2>
         {% if structure and structure.statements %}
-        <div class="structure-body">
-            <canvas id="structure-canvas"></canvas>
-            <div id="structure-tooltip"></div>
-        </div>
+        <div id="structure-root"></div>
+        <div id="structure-tooltip"></div>
         <ul class="structure-legend">
-            <li><span class="swatch" style="border-top:2px solid #1a7f37"></span>supports（根拠→主張）</li>
-            <li><span class="swatch" style="border-top:2px solid #0969da"></span>causes（原因→結果）</li>
-            <li><span class="swatch" style="border-top:2px dotted #8b949e"></span>elaborates（元→詳細）</li>
-            <li><span class="swatch" style="border-top:2px dashed #d97706"></span>contrasts（後→先）</li>
+            <li><span class="swatch" style="border-top:2px solid #1a7f37"></span>賛成 / 採用</li>
+            <li><span class="swatch" style="border-top:2px solid #d97706"></span>反対 / 保留</li>
+            <li><span class="swatch" style="border-top:2px dashed #8b949e"></span>見送り・却下（フェード）</li>
         </ul>
         <p class="structure-note">
             自動検出された構造であり、正解（ground truth）ではありません。
             抽出: {{ structure.extractors[0].name if structure.extractors else "?" }}{% if structure.extractors and structure.extractors[0].model %}（{{ structure.extractors[0].model }}）{% endif %}
         </p>
         <script>
-        // Deterministic layered DAG renderer (no force physics, no Math.random):
-        // one horizontal lane per topic (+ "その他"), statements placed left-to-
-        // right in transcript order on a shared time axis, arrows styled by
-        // relation type. Hover shows speaker/source text/evidence.
+        // Decision-flow multi-view panel (NSKETCH-873). A shared, deterministic
+        // (no Math.random, no physics) plugin framework: buildFlowModel() joins
+        // the topic + decision_flow once, each view exposes canRender/layout, and
+        // one shared hit-tester drives hover/tooltip for every view. No decision
+        // flows -> the classic whole-panel renderer runs unchanged (backward compat).
         (() => {
-            const data = JSON.parse(document.getElementById("structure-data").textContent);
-            const canvas = document.getElementById("structure-canvas");
+          const dataEl = document.getElementById("structure-data");
+          const root = document.getElementById("structure-root");
+          const tooltip = document.getElementById("structure-tooltip");
+          if (!dataEl || !root) return;
+          const data = JSON.parse(dataEl.textContent);
+
+          const statements = data.statements || [];
+          const relations = data.relations || [];
+          const topics = data.topics || [];
+          const flows = Array.isArray(data.decision_flows) ? data.decision_flows : [];
+          const uttText = new Map((data.utterances || []).map((u) => [u.index, u.text]));
+          const GRAY = "#8b949e";
+          const color = (id) => (window.detailTopics && id ? window.detailTopics.color(id) : GRAY);
+          const ink = () => getComputedStyle(document.body).color;
+
+          // ---- indexing ----
+          const stmtById = new Map(statements.map((s) => [s.id, s]));
+          const stTopic = new Map();
+          topics.forEach((t) => (t.statement_ids || []).forEach((sid) => {
+            if (!stTopic.has(sid)) stTopic.set(sid, t.id);
+          }));
+          const topicOf = (s) => stTopic.get(s.id) || s.topic_id || null;
+          const idNum = (id) => { const m = /(\d+)/.exec(id || ""); return m ? parseInt(m[1], 10) : 0; };
+          const uttIndexOf = (sid) => { const s = stmtById.get(sid); return s ? s.utterance_index : 1e9; };
+          const summaryOf = (sid) => { const s = stmtById.get(sid); return s ? (s.text || "") : ""; };
+          const fullText = (sid) => { const s = stmtById.get(sid); if (!s) return ""; return uttText.get(s.utterance_index) || s.text || ""; };
+          const speakerOf = (sid) => { const s = stmtById.get(sid); return s ? (s.speaker || "?") : "?"; };
+
+          // ---- visual vocabulary ----
+          const STANCE_COLOR = { pro: "#1a7f37", con: "#d97706", neutral: GRAY };
+          const STANCE_GLYPH = { pro: "＋", con: "−", neutral: "・" };
+          const STANCE_JA = { pro: "賛成", con: "反対", neutral: "中立" };
+          const OPT_STATUS_JA = { selected: "採用", rejected: "却下", abandoned: "見送り", unresolved: "未決", partial: "一部採用" };
+          const OUT_STATUS_JA = { decided: "決定", deferred: "保留", open: "未決" };
+          const OUT_KIND_JA = { single_option: "単一案", hybrid: "複数案採用", no_option: "案なし", unknown: "" };
+          const CONF_JA = { high: "高", medium: "中", low: "低" };
+
+          // ---- canvas / draw helpers ----
+          function fitCanvas(canvas, w, h) {
+            const dpr = window.devicePixelRatio || 1;
+            canvas.style.height = h + "px";
+            canvas.width = Math.round(w * dpr);
+            canvas.height = Math.round(h * dpr);
             const ctx = canvas.getContext("2d");
-            const tooltip = document.getElementById("structure-tooltip");
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.clearRect(0, 0, w, h);
+            return ctx;
+          }
+          function clamp(lo, v, hi) { return Math.max(lo, Math.min(hi, v)); }
+          function truncate(ctx, text, maxW) {
+            text = text || "";
+            if (maxW <= 0) return "";
+            if (ctx.measureText(text).width <= maxW) return text;
+            let s = text;
+            while (s.length > 1 && ctx.measureText(s + "…").width > maxW) s = s.slice(0, -1);
+            return s + "…";
+          }
+          function line(ctx, x1, y1, x2, y2) { ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); }
+          function curve(ctx, x1, y1, x2, y2) {
+            const my = (y1 + y2) / 2;
+            ctx.beginPath(); ctx.moveTo(x1, y1); ctx.bezierCurveTo(x1, my, x2, my, x2, y2); ctx.stroke();
+          }
+          function hcurve(ctx, x1, y1, x2, y2) {
+            const mx = (x1 + x2) / 2;
+            ctx.beginPath(); ctx.moveTo(x1, y1); ctx.bezierCurveTo(mx, y1, mx, y2, x2, y2); ctx.stroke();
+          }
+          function dot(ctx, x, y, r, fill, stroke) {
+            ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+            if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+            if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1.5; ctx.stroke(); }
+          }
+          function roundRect(ctx, x, y, w, h, r) {
+            ctx.beginPath();
+            ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r);
+            ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r);
+            ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+          }
 
-            const LEFT_PAD = 20;   // x of depth-0 dots
-            const DEPTH_STEP = 30; // x offset per logical-depth level (wide arrow area)
-            const MAX_DEPTH = 5;   // cap indentation so dots stay on-canvas
-            const ARROW_W = LEFT_PAD + MAX_DEPTH * DEPTH_STEP;  // dedicated arrow region
-            const TEXT_X = ARROW_W + 16;  // summary column, aligned right of the arrows
-            const ROW_H = 30;    // height per statement row
-            const HEAD_H = 44;   // topic-section header (label + summary lines)
-            const GAP = 12;      // gap before each topic section
-            const TOP = 6;
-            const NODE_RADIUS = 5;
-            const LABEL_CAP = 28;  // hard cap on the on-canvas summary length
-            const GRAY = "#8b949e";
-            const REL_STYLE = {  // basic straight lines, colored by relation type
-                supports:   "#1a7f37",
-                causes:     "#0969da",
-                elaborates: "#8b949e",
-                contrasts:  "#d97706",
+          // ---- tooltip ----
+          function stmtTip(sid) { return sid ? ("[" + speakerOf(sid) + "] " + fullText(sid)) : ""; }
+          function questionLines(q) {
+            const lines = ["◆ 論点: " + (q.summary || summaryOf(q.statement_id))];
+            if (q.statement_id) lines.push(stmtTip(q.statement_id));
+            return lines.filter(Boolean);
+          }
+          function optionLines(o) {
+            const lines = ["● " + (o.label || "案") + "（" + (OPT_STATUS_JA[o.status] || o.status || "") + "）"];
+            if (o.summary) lines.push(o.summary);
+            if (o.introduced_by) lines.push(stmtTip(o.introduced_by));
+            return lines.filter(Boolean);
+          }
+          function argLines(a) { return ["[" + (STANCE_JA[a.stance] || a.stance) + "] " + stmtTip(a.statement_id)]; }
+          function outcomeLines(oc, model) {
+            const head = "▣ " + (OUT_STATUS_JA[oc.status] || oc.status) + (OUT_KIND_JA[oc.kind] ? "・" + OUT_KIND_JA[oc.kind] : "");
+            const lines = [head];
+            if (oc.summary) lines.push(oc.summary);
+            (oc.selected_option_ids || []).forEach((oid) => {
+              const o = model.flow.options.find((x) => x.id === oid);
+              if (o) lines.push("採用: " + (o.label || oid));
+            });
+            return lines;
+          }
+          function showTip(lines, cx, cy) {
+            if (!tooltip) return;
+            const text = (lines || []).filter(Boolean).join("\n");
+            if (!text) { hideTip(); return; }
+            tooltip.textContent = text;
+            tooltip.style.display = "block";
+            const pad = 14, tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
+            let left = cx + pad, top = cy + pad;
+            if (left + tw > window.innerWidth - 8) left = cx - tw - pad;
+            if (top + th > window.innerHeight - 8) top = cy - th - pad;
+            tooltip.style.left = Math.max(4, left) + "px";
+            tooltip.style.top = Math.max(4, top) + "px";
+          }
+          function hideTip() { if (tooltip) tooltip.style.display = "none"; }
+
+          function bindHover(canvas, getScene, redraw) {
+            canvas.addEventListener("mousemove", (e) => {
+              const scene = getScene(); if (!scene) return;
+              const rect = canvas.getBoundingClientRect();
+              const x = e.clientX - rect.left, y = e.clientY - rect.top;
+              let best = null, bestD = Infinity;
+              scene.hit.forEach((h) => {
+                const dx = h.x - x, dy = h.y - y, d = dx * dx + dy * dy;
+                if (d <= h.r * h.r && d < bestD) { bestD = d; best = h; }
+              });
+              redraw(best ? best.id : null);
+              if (best) showTip(best.lines, e.clientX, e.clientY); else hideTip();
+            });
+            canvas.addEventListener("mouseleave", () => { hideTip(); redraw(null); });
+          }
+
+          // ---- normalized flow model (built once per topic) ----
+          function buildFlowModel(topic, flow) {
+            const members = statements
+              .filter((s) => topicOf(s) === topic.id)
+              .slice()
+              .sort((a, b) => a.utterance_index - b.utterance_index || idNum(a.id) - idNum(b.id));
+            const rowOf = new Map(members.map((s, i) => [s.id, i]));
+            const model = { topic, color: color(topic.id), members, rowOf, flow: null };
+            if (!flow) return model;
+            const introIdx = (o) => {
+              const sid = o.introduced_by && rowOf.has(o.introduced_by)
+                ? o.introduced_by : (o.statement_ids || []).find((s) => rowOf.has(s));
+              return sid != null ? uttIndexOf(sid) : 1e9;
             };
-
-            const statements = data.statements || [];
-            const relations = data.relations || [];
-            const topics = data.topics || [];
-            const uttText = new Map((data.utterances || []).map((u) => [u.index, u.text]));
-            const topicColor = (id) =>
-                (window.detailTopics && id) ? window.detailTopics.color(id) : GRAY;
-
-            // Topic membership is reported on topics[].statement_ids (LLM path);
-            // statement.topic_id is the secondary source (clustered/fallback
-            // path). Using both fixes "every statement lands in その他".
-            const stTopic = new Map();
-            topics.forEach((t) => (t.statement_ids || []).forEach((sid) => {
-                if (!stTopic.has(sid)) stTopic.set(sid, t.id);
-            }));
-            const topicOf = (s) => stTopic.get(s.id) || s.topic_id || null;
-
-            // Section order: topics as delivered (deterministic), then a trailing
-            // "その他" only when some statement has no topic at all.
-            const laneIds = topics.map((t) => t.id);
-            const laneLabels = new Map(topics.map((t) => [t.id, t.label]));
-            const laneSummary = new Map(topics.map((t) => [t.id, t.summary || ""]));
-            if (statements.some((s) => !topicOf(s))) {
-                laneIds.push(null);
-                laneLabels.set(null, "その他");
-            }
-            // Per-topic "what was discussed" line: the LLM summary when present,
-            // else a derived join of the first couple member statement summaries.
-            function summaryFor(laneId, members) {
-                const given = laneSummary.get(laneId);
-                if (given) return given;
-                return members.slice(0, 2).map((s) => s.text).join(" / ");
-            }
-
-            // Logical depth: 0 for statements with no incoming relation, else
-            // 1 + max(depth(source)). Dots are indented by depth so arrows can
-            // connect them directly (memoized DFS with a cycle guard).
-            const incoming = new Map();
-            relations.forEach((r) => {
-                if (!incoming.has(r.target)) incoming.set(r.target, []);
-                incoming.get(r.target).push(r.source);
+            const options = (flow.options || []).slice().sort(
+              (a, b) => introIdx(a) - introIdx(b) || String(a.id).localeCompare(String(b.id))
+            );
+            const argsByOption = new Map();
+            (flow.arguments || []).forEach((a) => {
+              if (!argsByOption.has(a.option_id)) argsByOption.set(a.option_id, []);
+              argsByOption.get(a.option_id).push(a);
             });
-            const depthCache = new Map();
-            function depthOf(id, stack) {
-                if (depthCache.has(id)) return depthCache.get(id);
-                stack = stack || new Set();
-                if (stack.has(id)) return 0;  // cycle guard
-                stack.add(id);
-                let d = 0;
-                (incoming.get(id) || []).forEach((src) => {
-                    d = Math.max(d, 1 + depthOf(src, stack));
+            model.flow = {
+              question: (flow.questions && flow.questions[0]) || null,
+              questions: flow.questions || [],
+              options: options.map((o, i) => ({
+                id: o.id, label: o.label, summary: o.summary,
+                statement_ids: o.statement_ids || [], introduced_by: o.introduced_by,
+                status: o.status, index: i, args: (argsByOption.get(o.id) || []),
+              })),
+              outcome: flow.outcome || null,
+              confidence: flow.confidence || "medium",
+              warnings: flow.warnings || [],
+            };
+            return model;
+          }
+
+          function outcomeColor(oc, m) {
+            return oc.status === "decided" ? m.color : (oc.status === "deferred" ? "#d97706" : GRAY);
+          }
+
+          // =====================================================================
+          // View plugins: { id, label, canRender(model,width), layout -> scene }
+          // scene = { height, hit:[{x,y,r,id,lines}], draw(ctx,hoverId), note? }
+          // =====================================================================
+
+          // --- rails: vertical git-graph (default) -----------------------------
+          const railsView = {
+            id: "rails", label: "決定レール",
+            canRender: (m) => !!m.flow && m.flow.options.length >= 1,
+            layout(m, width) {
+              const f = m.flow, N = f.options.length;
+              const SPINE = 42, ROWH = 30, TOP = 44, LABELW = 150;
+              const railArea = clamp(120, width - SPINE - LABELW - 16, 6000);
+              const laneGap = clamp(40, railArea / Math.max(1, N), 110);
+              const xOf = (i) => SPINE + laneGap * (i + 1);
+              const rightmost = xOf(Math.max(0, N - 1));
+              const labelX = Math.min(width - 6, rightmost + 18);
+              const yOf = (sid) => { const idx = m.rowOf.get(sid); return idx == null ? TOP : TOP + idx * ROWH + ROWH / 2; };
+              const bottom = TOP + m.members.length * ROWH;
+              const q = f.question;
+              const qy = q && q.statement_id && m.rowOf.has(q.statement_id) ? yOf(q.statement_id) : TOP - 10;
+              const oc = f.outcome;
+              const ocy = oc && oc.statement_id && m.rowOf.has(oc.statement_id) ? yOf(oc.statement_id) : bottom + 12;
+              const height = Math.max(bottom, ocy) + 34;
+              const rails = f.options.map((o, i) => {
+                const introSid = o.introduced_by && m.rowOf.has(o.introduced_by)
+                  ? o.introduced_by : (o.statement_ids || []).find((s) => m.rowOf.has(s));
+                const introY = introSid ? yOf(introSid) : qy + ROWH;
+                const ys = (o.statement_ids || []).filter((s) => m.rowOf.has(s)).map(yOf).concat([introY]);
+                const lastY = Math.max.apply(null, ys);
+                const selected = !!(oc && (oc.selected_option_ids || []).indexOf(o.id) !== -1);
+                return { o, i, x: xOf(i), introY, endY: selected ? ocy : lastY, selected };
+              });
+              const hit = [];
+              if (q) hit.push({ x: SPINE, y: qy, r: 12, id: "q", lines: questionLines(q) });
+              rails.forEach((e) => {
+                hit.push({ x: e.x, y: e.introY, r: 11, id: "o:" + e.o.id, lines: optionLines(e.o) });
+                (e.o.args || []).forEach((a) => {
+                  if (m.rowOf.has(a.statement_id)) hit.push({ x: e.x, y: yOf(a.statement_id), r: 9, id: "a:" + a.id, lines: argLines(a) });
                 });
-                stack.delete(id);
-                depthCache.set(id, d);
-                return d;
-            }
-
-            // Vertical column grouped by topic; each dot is indented by its
-            // logical depth inside the left "arrow area", summaries aligned in a
-            // fixed column. Grows downward as statements accumulate.
-            const width = () => canvas.clientWidth || 900;
-            const pos = new Map();     // statement id -> {x, y, statement}
-            const sections = [];       // {label, color, summary, y} header rows
-            let contentH = TOP;
-            function layout() {
-                pos.clear();
-                sections.length = 0;
-                let y = TOP;
-                laneIds.forEach((laneId) => {
-                    const members = statements.filter((s) => (topicOf(s) || null) === laneId);
-                    if (!members.length) return;
-                    y += GAP;
-                    sections.push({
-                        label: laneLabels.get(laneId) || "その他",
-                        color: topicColor(laneId),
-                        summary: summaryFor(laneId, members),
-                        y,
-                    });
-                    y += HEAD_H;
-                    members.forEach((s) => {
-                        const depth = Math.min(depthOf(s.id), MAX_DEPTH);
-                        pos.set(s.id, { x: LEFT_PAD + depth * DEPTH_STEP, y: y + ROW_H / 2, statement: s });
-                        y += ROW_H;
-                    });
+              });
+              if (oc) hit.push({ x: SPINE, y: ocy, r: 13, id: "oc", lines: outcomeLines(oc, m) });
+              function draw(ctx, hoverId) {
+                const c = ink(); ctx.lineCap = "round";
+                ctx.strokeStyle = c; ctx.globalAlpha = 0.12; ctx.lineWidth = 2;
+                line(ctx, SPINE, qy, SPINE, ocy); ctx.globalAlpha = 1;
+                rails.forEach((e) => {
+                  const faded = e.o.status === "rejected" || e.o.status === "abandoned";
+                  ctx.strokeStyle = c; ctx.globalAlpha = 0.18; ctx.lineWidth = 1.5; ctx.setLineDash([]);
+                  line(ctx, SPINE, e.introY, e.x, e.introY); ctx.globalAlpha = 1;
+                  ctx.strokeStyle = m.color; ctx.globalAlpha = faded ? 0.4 : 0.9;
+                  ctx.lineWidth = e.selected ? 3 : 2;
+                  ctx.setLineDash(faded ? [2, 4] : (e.o.status === "partial" ? [7, 4] : []));
+                  line(ctx, e.x, e.introY, e.x, e.endY); ctx.setLineDash([]); ctx.globalAlpha = 1;
+                  if (e.selected) {
+                    ctx.strokeStyle = m.color; ctx.globalAlpha = 0.85; ctx.lineWidth = 2.5;
+                    line(ctx, e.x, e.endY, SPINE, ocy); ctx.globalAlpha = 1;
+                  } else if (faded) {
+                    ctx.globalAlpha = 0.55; ctx.fillStyle = m.color; ctx.font = "10px sans-serif";
+                    ctx.textAlign = "left"; ctx.textBaseline = "middle";
+                    ctx.fillText("見送り", e.x + 6, e.endY + 9); ctx.globalAlpha = 1;
+                  }
                 });
-                contentH = y + 12;
-            }
-            const height = () => contentH;
-
-            function resize() {
-                layout();
-                const dpr = window.devicePixelRatio || 1;
-                canvas.style.height = height() + "px";
-                canvas.width = Math.round(width() * dpr);
-                canvas.height = Math.round(height() * dpr);
-                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            }
-
-            function arrow(a, b, color, confidence) {
-                // direct straight line between the two (depth-staggered) dots
-                ctx.strokeStyle = color;
-                ctx.fillStyle = color;
-                ctx.globalAlpha = 0.35 + confidence * 0.5;
-                ctx.lineWidth = 1 + confidence;
-                ctx.beginPath();
-                ctx.moveTo(a.x, a.y);
-                ctx.lineTo(b.x, b.y);
-                ctx.stroke();
-                // arrowhead at the target, oriented along the line
-                const angle = Math.atan2(b.y - a.y, b.x - a.x);
-                const size = 7;
-                ctx.beginPath();
-                ctx.moveTo(b.x, b.y);
-                ctx.lineTo(b.x - size * Math.cos(angle - 0.45), b.y - size * Math.sin(angle - 0.45));
-                ctx.lineTo(b.x - size * Math.cos(angle + 0.45), b.y - size * Math.sin(angle + 0.45));
-                ctx.closePath();
-                ctx.fill();
-                ctx.globalAlpha = 1;
-            }
-
-            function draw(hoverId) {
-                const ink = getComputedStyle(document.body).color; // light/dark aware
-                ctx.clearRect(0, 0, width(), height());
-
-                // topic section headers: colored label + a "what was discussed"
-                // summary line, with a divider under the header.
-                ctx.textAlign = "left";
-                ctx.textBaseline = "alphabetic";
-                sections.forEach((sec) => {
-                    ctx.fillStyle = sec.color;
-                    ctx.font = "600 13px sans-serif";
-                    ctx.fillText(sec.label, 4, sec.y + 14);
-                    if (sec.summary) {
-                        ctx.fillStyle = ink;
-                        ctx.globalAlpha = 0.7;
-                        ctx.font = "12px sans-serif";
-                        const cap = Math.max(12, Math.floor((width() - 16) / 12));
-                        const sm = sec.summary.length > cap ? sec.summary.slice(0, cap - 1) + "…" : sec.summary;
-                        ctx.fillText(sm, 4, sec.y + 32);
-                        ctx.globalAlpha = 1;
-                    }
-                    ctx.strokeStyle = ink;
-                    ctx.globalAlpha = 0.12;
-                    ctx.lineWidth = 1;
-                    ctx.beginPath();
-                    ctx.moveTo(0, sec.y + HEAD_H - 3);
-                    ctx.lineTo(width(), sec.y + HEAD_H - 3);
-                    ctx.stroke();
-                    ctx.globalAlpha = 1;
+                rails.forEach((e) => (e.o.args || []).forEach((a) => {
+                  if (!m.rowOf.has(a.statement_id)) return;
+                  const y = yOf(a.statement_id), hov = hoverId === "a:" + a.id, col = STANCE_COLOR[a.stance] || GRAY;
+                  dot(ctx, e.x, y, hov ? 6 : 4.5, col);
+                  ctx.fillStyle = "#fff"; ctx.font = "9px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                  ctx.fillText(STANCE_GLYPH[a.stance] || "", e.x, y + 0.5);
+                }));
+                rails.forEach((e) => {
+                  const hov = hoverId === "o:" + e.o.id;
+                  dot(ctx, e.x, e.introY, hov ? 7 : 5.5, m.color, "#fff");
+                  ctx.fillStyle = c; ctx.globalAlpha = e.selected ? 1 : 0.8;
+                  ctx.font = (e.selected ? "600 " : "") + "12px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+                  ctx.fillText(truncate(ctx, e.o.label || ("案" + (e.i + 1)), width - labelX - 6), labelX, e.introY);
+                  ctx.globalAlpha = 1;
                 });
-
-                // relations: direct straight arrows between depth-staggered dots
-                relations.forEach((r) => {
-                    const a = pos.get(r.source);
-                    const b = pos.get(r.target);
-                    if (!a || !b) return;
-                    arrow(a, b, REL_STYLE[r.type] || REL_STYLE.elaborates, r.confidence || 0.5);
-                });
-
-                // green dot (indented by depth) + short summary in a fixed column
-                ctx.textBaseline = "middle";
-                pos.forEach((p, id) => {
-                    const hovered = id === hoverId;
-                    ctx.fillStyle = hovered ? "#d4a72c" : "#1a7f37";
-                    ctx.beginPath();
-                    ctx.arc(p.x, p.y, hovered ? NODE_RADIUS + 2 : NODE_RADIUS, 0, Math.PI * 2);
-                    ctx.fill();
-                    const avail = Math.floor((width() - TEXT_X - 8) / 12);
-                    const cap = Math.max(6, Math.min(LABEL_CAP, avail));
-                    const t = p.statement.text || "";
-                    const label = t.length > cap ? t.slice(0, cap - 1) + "…" : t;
-                    ctx.fillStyle = ink;
-                    ctx.globalAlpha = hovered ? 1 : 0.85;
-                    ctx.font = (hovered ? "600 " : "") + "13px sans-serif";
-                    ctx.fillText(label, TEXT_X, p.y);
-                    ctx.globalAlpha = 1;
-                });
-            }
-
-            function nodeAt(x, y) {
-                let best = null;
-                let bestDist = 12 * 12; // hit radius
-                pos.forEach((p, id) => {
-                    const d = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y);
-                    if (d < bestDist) { bestDist = d; best = id; }
-                });
-                return best;
-            }
-
-            function relationSummary(id) {
-                const lines = [];
-                relations.forEach((r) => {
-                    if (r.source !== id && r.target !== id) return;
-                    const other = pos.get(r.source === id ? r.target : r.source);
-                    if (!other) return;
-                    const dir = r.source === id ? "→" : "←";
-                    const marker = r.evidence && r.evidence.marker ? `「${r.evidence.marker}」` : "";
-                    lines.push(`${r.type} ${dir} ${other.statement.text.slice(0, 20)} ${marker}`);
-                });
-                return lines;
-            }
-
-            canvas.addEventListener("mousemove", (event) => {
-                const rect = canvas.getBoundingClientRect();
-                const x = event.clientX - rect.left;
-                const y = event.clientY - rect.top;
-                const id = nodeAt(x, y);
-                draw(id);
-                if (id) {
-                    const p = pos.get(id);
-                    const full = uttText.get(p.statement.utterance_index) || p.statement.text;
-                    const lines = [`[${p.statement.speaker || "?"}] ${full}`]
-                        .concat(relationSummary(id));
-                    tooltip.textContent = lines.join("\n");
-                    tooltip.style.left = Math.min(x + 14, width() - 200) + "px";
-                    tooltip.style.top = (y + 14) + "px";
-                    tooltip.style.display = "block";
-                } else {
-                    tooltip.style.display = "none";
+                if (q) {
+                  const hov = hoverId === "q"; dot(ctx, SPINE, qy, hov ? 8 : 6.5, c);
+                  ctx.fillStyle = "#fff"; ctx.font = "bold 9px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                  ctx.fillText("?", SPINE, qy + 0.5);
                 }
-            });
-            canvas.addEventListener("mouseleave", () => {
-                tooltip.style.display = "none";
-                draw(null);
-            });
-            window.addEventListener("resize", () => { resize(); draw(null); });
+                if (oc) {
+                  const hov = hoverId === "oc", col = outcomeColor(oc, m);
+                  if (oc.status === "open") dot(ctx, SPINE, ocy, hov ? 8 : 6.5, null, col);
+                  else dot(ctx, SPINE, ocy, hov ? 8 : 6.5, col);
+                  ctx.fillStyle = ink(); ctx.globalAlpha = 0.92; ctx.font = "600 11px sans-serif";
+                  ctx.textAlign = "left"; ctx.textBaseline = "middle";
+                  ctx.fillText(truncate(ctx, (OUT_STATUS_JA[oc.status] || "") + (oc.summary ? "：" + oc.summary : ""), width - SPINE - 22), SPINE + 12, ocy);
+                  ctx.globalAlpha = 1;
+                }
+              }
+              return { height, hit, draw };
+            },
+          };
 
-            resize();
-            draw(null);
+          // --- subway: horizontal fork-join (desktop, 2-4 options) -------------
+          const subwayView = {
+            id: "subway", label: "路線図",
+            canRender: (m, w) => !!m.flow && w >= 640 && m.flow.options.length >= 2 && m.flow.options.length <= 4,
+            layout(m, width) {
+              const f = m.flow, N = f.options.length;
+              const xQ = 92, xOut = width - 140, laneL = xQ + 56, laneR = xOut - 56;
+              const TOP = 50, laneGap = clamp(48, 240 / Math.max(1, N - 1), 84);
+              const laneY = (i) => TOP + i * laneGap;
+              const midY = TOP + ((N - 1) * laneGap) / 2;
+              const height = TOP + (N - 1) * laneGap + 60;
+              const oc = f.outcome, q = f.question, cx = (laneL + laneR) / 2;
+              const hit = [];
+              if (q) hit.push({ x: xQ, y: midY, r: 16, id: "q", lines: questionLines(q) });
+              f.options.forEach((o, i) => {
+                hit.push({ x: cx, y: laneY(i), r: 12, id: "o:" + o.id, lines: optionLines(o) });
+                const args = o.args || [];
+                args.forEach((a, k) => {
+                  const ax = laneL + (laneR - laneL) * ((k + 1) / (args.length + 1));
+                  hit.push({ x: ax, y: laneY(i), r: 8, id: "a:" + a.id, lines: argLines(a) });
+                });
+              });
+              if (oc) hit.push({ x: xOut, y: midY, r: 16, id: "oc", lines: outcomeLines(oc, m) });
+              function draw(ctx, hoverId) {
+                const c = ink(); ctx.lineCap = "round";
+                f.options.forEach((o, i) => {
+                  const y = laneY(i), sel = !!(oc && (oc.selected_option_ids || []).indexOf(o.id) !== -1);
+                  const faded = o.status === "rejected" || o.status === "abandoned";
+                  ctx.strokeStyle = m.color; ctx.globalAlpha = faded ? 0.35 : 0.85; ctx.lineWidth = sel ? 4 : 2.5;
+                  ctx.setLineDash(faded ? [3, 5] : []);
+                  if (q) hcurve(ctx, xQ + 14, midY, laneL, y);
+                  line(ctx, laneL, y, laneR, y);
+                  if (oc && !faded) hcurve(ctx, laneR, y, xOut - 14, midY);
+                  ctx.setLineDash([]); ctx.globalAlpha = 1;
+                  const args = o.args || [];
+                  args.forEach((a, k) => {
+                    const ax = laneL + (laneR - laneL) * ((k + 1) / (args.length + 1));
+                    dot(ctx, ax, y, hoverId === "a:" + a.id ? 6 : 4.5, STANCE_COLOR[a.stance] || GRAY);
+                  });
+                  const hov = hoverId === "o:" + o.id;
+                  dot(ctx, cx, y, hov ? 8 : 6, m.color, "#fff");
+                  ctx.fillStyle = c; ctx.globalAlpha = sel ? 1 : 0.9; ctx.font = (sel ? "600 " : "") + "12px sans-serif";
+                  ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+                  ctx.fillText(truncate(ctx, o.label || ("案" + (i + 1)), laneR - laneL), cx, y - 9);
+                });
+                if (q) {
+                  const hov = hoverId === "q"; dot(ctx, xQ, midY, hov ? 15 : 13, c);
+                  ctx.fillStyle = "#fff"; ctx.font = "bold 12px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                  ctx.fillText("?", xQ, midY);
+                  ctx.fillStyle = c; ctx.font = "11px sans-serif"; ctx.textBaseline = "top";
+                  ctx.fillText(truncate(ctx, q.summary || "論点", 130), xQ, midY + 17);
+                }
+                if (oc) {
+                  const hov = hoverId === "oc", col = outcomeColor(oc, m);
+                  if (oc.status === "open") dot(ctx, xOut, midY, hov ? 15 : 13, null, col);
+                  else dot(ctx, xOut, midY, hov ? 15 : 13, col);
+                  ctx.fillStyle = "#fff"; ctx.font = "bold 10px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                  ctx.fillText((OUT_STATUS_JA[oc.status] || "").slice(0, 2), xOut, midY);
+                  ctx.fillStyle = ink(); ctx.font = "11px sans-serif"; ctx.textBaseline = "top";
+                  ctx.fillText(truncate(ctx, oc.summary || "", 150), xOut, midY + 17);
+                }
+              }
+              return { height, hit, draw };
+            },
+          };
+
+          // --- ibis: top-down argument tree (experimental) ---------------------
+          const ibisView = {
+            id: "ibis", label: "IBIS",
+            canRender: (m) => !!m.flow && m.flow.options.some((o) => (o.args || []).length > 0),
+            layout(m, width) {
+              const f = m.flow;
+              let cursor = 0;
+              const optionNodes = f.options.map((o) => {
+                const argNodes = (o.args || []).map((a) => { const ux = cursor + 0.5; cursor += 1; return { ref: a, ux }; });
+                let ux;
+                if (argNodes.length) ux = (argNodes[0].ux + argNodes[argNodes.length - 1].ux) / 2;
+                else { ux = cursor + 0.5; cursor += 1; }
+                return { ref: o, ux, args: argNodes };
+              });
+              const leaves = Math.max(1, cursor);
+              const rootUx = optionNodes.length ? (optionNodes[0].ux + optionNodes[optionNodes.length - 1].ux) / 2 : 0.5;
+              const colW = clamp(64, (width - 40) / leaves, 200);
+              const xOf = (ux) => 20 + ux * colW;
+              const q = f.question, oc = f.outcome;
+              const yQ = 40, yO = 108, yA = 178;
+              const yOut = (optionNodes.some((n) => n.args.length) ? yA : yO) + 66;
+              const height = yOut + 34;
+              const hit = [];
+              hit.push({ x: xOf(rootUx), y: yQ, r: 14, id: "q", lines: q ? questionLines(q) : ["◆ 論点"] });
+              optionNodes.forEach((n) => {
+                hit.push({ x: xOf(n.ux), y: yO, r: 12, id: "o:" + n.ref.id, lines: optionLines(n.ref) });
+                n.args.forEach((an) => hit.push({ x: xOf(an.ux), y: yA, r: 9, id: "a:" + an.ref.id, lines: argLines(an.ref) }));
+              });
+              if (oc) hit.push({ x: xOf(rootUx), y: yOut, r: 13, id: "oc", lines: outcomeLines(oc, m) });
+              function draw(ctx, hoverId) {
+                const c = ink(); ctx.lineCap = "round";
+                ctx.strokeStyle = c; ctx.lineWidth = 1.5;
+                optionNodes.forEach((n) => {
+                  ctx.globalAlpha = 0.25; ctx.setLineDash([]); curve(ctx, xOf(rootUx), yQ, xOf(n.ux), yO);
+                  n.args.forEach((an) => { ctx.globalAlpha = 0.2; curve(ctx, xOf(n.ux), yO, xOf(an.ux), yA); });
+                });
+                ctx.globalAlpha = 1;
+                if (oc) {
+                  ctx.strokeStyle = m.color; ctx.setLineDash([5, 4]); ctx.globalAlpha = 0.7; ctx.lineWidth = 2;
+                  optionNodes.forEach((n) => { if ((oc.selected_option_ids || []).indexOf(n.ref.id) !== -1) curve(ctx, xOf(n.ux), yO, xOf(rootUx), yOut); });
+                  ctx.setLineDash([]); ctx.globalAlpha = 1;
+                }
+                optionNodes.forEach((n) => n.args.forEach((an) => {
+                  const hov = hoverId === "a:" + an.ref.id;
+                  dot(ctx, xOf(an.ux), yA, hov ? 6 : 4.5, STANCE_COLOR[an.ref.stance] || GRAY);
+                  ctx.fillStyle = "#fff"; ctx.font = "9px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                  ctx.fillText(STANCE_GLYPH[an.ref.stance] || "", xOf(an.ux), yA + 0.5);
+                }));
+                optionNodes.forEach((n) => {
+                  const hov = hoverId === "o:" + n.ref.id, sel = oc && (oc.selected_option_ids || []).indexOf(n.ref.id) !== -1;
+                  dot(ctx, xOf(n.ux), yO, hov ? 7 : 5.5, m.color, "#fff");
+                  ctx.fillStyle = c; ctx.globalAlpha = sel ? 1 : 0.85; ctx.font = (sel ? "600 " : "") + "11px sans-serif";
+                  ctx.textAlign = "center"; ctx.textBaseline = "top";
+                  ctx.fillText(truncate(ctx, n.ref.label || "案", colW * Math.max(1, n.args.length) + 26), xOf(n.ux), yO + 8);
+                });
+                const hovq = hoverId === "q";
+                dot(ctx, xOf(rootUx), yQ, hovq ? 9 : 7, c);
+                ctx.fillStyle = "#fff"; ctx.font = "bold 10px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                ctx.fillText("?", xOf(rootUx), yQ + 0.5);
+                ctx.fillStyle = c; ctx.font = "600 11px sans-serif"; ctx.textBaseline = "bottom";
+                ctx.fillText(truncate(ctx, (q && q.summary) || "論点", width - 20), xOf(rootUx), yQ - 10);
+                if (oc) {
+                  const hov = hoverId === "oc", col = outcomeColor(oc, m);
+                  if (oc.status === "open") dot(ctx, xOf(rootUx), yOut, hov ? 8 : 6.5, null, col);
+                  else dot(ctx, xOf(rootUx), yOut, hov ? 8 : 6.5, col);
+                  ctx.fillStyle = ink(); ctx.font = "600 11px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "top";
+                  ctx.fillText(truncate(ctx, (OUT_STATUS_JA[oc.status] || "") + (oc.summary ? "：" + oc.summary : ""), width - 20), xOf(rootUx), yOut + 9);
+                }
+              }
+              return { height, hit, draw };
+            },
+          };
+
+          // --- ribbons: Sankey-style, fixed-width (honest) ---------------------
+          const ribbonsView = {
+            id: "ribbons", label: "リボン",
+            canRender: (m) => !!m.flow && m.flow.options.length >= 2 && !!m.flow.outcome && m.flow.outcome.status !== "open",
+            layout(m, width) {
+              const f = m.flow, N = f.options.length;
+              const xQ = 66, xO = width * 0.44, xOut = width - 84;
+              const TOP = 44, gap = clamp(28, 220 / N, 58), TH = 13;
+              const oy = (i) => TOP + i * (TH + gap) + TH / 2;
+              const midY = TOP + (N * (TH + gap) - gap) / 2;
+              const height = TOP + N * (TH + gap) + 26;
+              const oc = f.outcome, q = f.question, cx = (xQ + xOut) / 2;
+              const hit = [];
+              if (q) hit.push({ x: xQ, y: midY, r: 15, id: "q", lines: questionLines(q) });
+              f.options.forEach((o, i) => hit.push({ x: cx, y: oy(i), r: 11, id: "o:" + o.id, lines: optionLines(o) }));
+              if (oc) hit.push({ x: xOut, y: midY, r: 15, id: "oc", lines: outcomeLines(oc, m) });
+              function ribbon(ctx, x1, y1, x2, y2, colr, alpha) {
+                const mx = (x1 + x2) / 2, h = TH / 2;
+                ctx.fillStyle = colr; ctx.globalAlpha = alpha;
+                ctx.beginPath();
+                ctx.moveTo(x1, y1 - h);
+                ctx.bezierCurveTo(mx, y1 - h, mx, y2 - h, x2, y2 - h);
+                ctx.lineTo(x2, y2 + h);
+                ctx.bezierCurveTo(mx, y2 + h, mx, y1 + h, x1, y1 + h);
+                ctx.closePath(); ctx.fill(); ctx.globalAlpha = 1;
+              }
+              function draw(ctx, hoverId) {
+                const c = ink();
+                f.options.forEach((o, i) => {
+                  const y = oy(i), sel = (oc.selected_option_ids || []).indexOf(o.id) !== -1;
+                  const faded = o.status === "rejected" || o.status === "abandoned";
+                  ribbon(ctx, xQ, midY, xO, y, m.color, faded ? 0.16 : (sel ? 0.5 : 0.3));
+                  if (!faded) ribbon(ctx, xO, y, xOut, midY, m.color, sel ? 0.5 : 0.22);
+                  const hov = hoverId === "o:" + o.id;
+                  ctx.fillStyle = c; ctx.globalAlpha = sel ? 1 : 0.85; ctx.font = (sel ? "600 " : "") + "12px sans-serif";
+                  ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+                  ctx.fillText(truncate(ctx, o.label || ("案" + (i + 1)), (xOut - xQ) * 0.5), cx, y - TH / 2 - 5);
+                  if (hov) dot(ctx, cx, y, 4, m.color);
+                });
+                if (q) {
+                  ctx.fillStyle = c; roundRect(ctx, xQ - 18, midY - 14, 36, 28, 8); ctx.fill();
+                  ctx.fillStyle = "#fff"; ctx.font = "bold 12px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                  ctx.fillText("?", xQ, midY);
+                }
+                const col = outcomeColor(oc, m);
+                ctx.fillStyle = col; roundRect(ctx, xOut - 22, midY - 14, 44, 28, 8); ctx.fill();
+                ctx.fillStyle = "#fff"; ctx.font = "bold 11px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                ctx.fillText((OUT_STATUS_JA[oc.status] || "").slice(0, 2), xOut, midY);
+              }
+              return { height, hit, draw, note: "帯の太さは量や重要度を表すものではありません。" };
+            },
+          };
+
+          // --- classic: the existing depth-indented view (per topic / whole) ---
+          function classicScene(width, sts, rels, laneDefs) {
+            // Constants kept identical to the pre-refactor classic renderer so
+            // no-decision-flow jobs draw exactly as before (backward compat).
+            const LEFT = 20, DSTEP = 30, MAXD = 5;
+            const ARROWW = LEFT + MAXD * DSTEP, TEXTX = ARROWW + 16;
+            const ROWH = 30, HEAD = 44, GAP = 12, TOP = 6, RAD = 5;
+            const REL = { supports: "#1a7f37", causes: "#0969da", elaborates: "#8b949e", contrasts: "#d97706" };
+            const laneIds = laneDefs.map((l) => l.id);
+            const hasNull = laneIds.indexOf(null) !== -1;
+            const laneOf = (s) => {
+              const t = topicOf(s);
+              if (laneIds.indexOf(t) !== -1) return t;
+              return hasNull ? null : t;
+            };
+            const stset = new Set(sts.map((s) => s.id));
+            const incoming = new Map();
+            rels.forEach((r) => {
+              if (!stset.has(r.source) || !stset.has(r.target)) return;
+              if (!incoming.has(r.target)) incoming.set(r.target, []);
+              incoming.get(r.target).push(r.source);
+            });
+            const dcache = new Map();
+            function depth(id, stack) {
+              if (dcache.has(id)) return dcache.get(id);
+              stack = stack || new Set(); if (stack.has(id)) return 0; stack.add(id);
+              let d = 0; (incoming.get(id) || []).forEach((s) => { d = Math.max(d, 1 + depth(s, stack)); });
+              stack.delete(id); dcache.set(id, d); return d;
+            }
+            const pos = new Map(), sections = []; let y = TOP;
+            laneDefs.forEach((lane) => {
+              const members = sts.filter((s) => laneOf(s) === lane.id);
+              if (!members.length) return;
+              y += GAP;
+              // Match old summaryFor(): explicit topic summary, else a derived
+              // join of the first two member statements (fallback/clustered path
+              // topics carry no summary — without this their line vanishes).
+              const summary = lane.summary || members.slice(0, 2).map((s) => s.text).join(" / ");
+              sections.push({ label: lane.label, color: lane.id != null ? color(lane.id) : GRAY, summary, y });
+              y += HEAD;
+              members.forEach((s) => { const d = Math.min(depth(s.id), MAXD); pos.set(s.id, { x: LEFT + d * DSTEP, y: y + ROWH / 2, s }); y += ROWH; });
+            });
+            const height = y + 12;
+            function relTip(id) {
+              const out = [];
+              rels.forEach((r) => {
+                if (r.source !== id && r.target !== id) return;
+                const o = pos.get(r.source === id ? r.target : r.source); if (!o) return;
+                const dir = r.source === id ? "→" : "←";
+                const marker = r.evidence && r.evidence.marker ? "「" + r.evidence.marker + "」" : "";
+                out.push(r.type + " " + dir + " " + (o.s.text || "").slice(0, 20) + (marker ? " " + marker : ""));
+              });
+              return out;
+            }
+            const hit = [];
+            pos.forEach((p, id) => hit.push({ x: p.x, y: p.y, r: 12, id: "s:" + id, lines: [stmtTip(id)].concat(relTip(id)) }));
+            function arrow(ctx, a, b, col, conf) {
+              ctx.strokeStyle = col; ctx.fillStyle = col; ctx.globalAlpha = 0.35 + conf * 0.5; ctx.lineWidth = 1 + conf;
+              line(ctx, a.x, a.y, b.x, b.y);
+              const ang = Math.atan2(b.y - a.y, b.x - a.x), sz = 7;
+              ctx.beginPath(); ctx.moveTo(b.x, b.y);
+              ctx.lineTo(b.x - sz * Math.cos(ang - 0.45), b.y - sz * Math.sin(ang - 0.45));
+              ctx.lineTo(b.x - sz * Math.cos(ang + 0.45), b.y - sz * Math.sin(ang + 0.45));
+              ctx.closePath(); ctx.fill(); ctx.globalAlpha = 1;
+            }
+            function draw(ctx, hoverId) {
+              const c = ink(); ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+              sections.forEach((sec) => {
+                ctx.fillStyle = sec.color; ctx.font = "600 13px sans-serif"; ctx.fillText(sec.label, 4, sec.y + 14);
+                if (sec.summary) {
+                  ctx.fillStyle = c; ctx.globalAlpha = 0.7; ctx.font = "12px sans-serif";
+                  const cap = Math.max(12, Math.floor((width - 16) / 12));
+                  ctx.fillText(sec.summary.length > cap ? sec.summary.slice(0, cap - 1) + "…" : sec.summary, 4, sec.y + 32);
+                  ctx.globalAlpha = 1;
+                }
+                ctx.strokeStyle = c; ctx.globalAlpha = 0.12; ctx.lineWidth = 1;
+                line(ctx, 0, sec.y + HEAD - 3, width, sec.y + HEAD - 3); ctx.globalAlpha = 1;
+              });
+              rels.forEach((r) => { const a = pos.get(r.source), b = pos.get(r.target); if (!a || !b) return; arrow(ctx, a, b, REL[r.type] || REL.elaborates, r.confidence || 0.5); });
+              ctx.textBaseline = "middle";
+              pos.forEach((p, id) => {
+                const hov = ("s:" + id) === hoverId;
+                dot(ctx, p.x, p.y, hov ? RAD + 2 : RAD, hov ? "#d4a72c" : "#1a7f37");
+                const avail = Math.floor((width - TEXTX - 8) / 12), cap = Math.max(6, Math.min(28, avail));
+                const t = p.s.text || ""; ctx.fillStyle = c; ctx.globalAlpha = hov ? 1 : 0.85;
+                ctx.font = (hov ? "600 " : "") + "13px sans-serif";
+                ctx.fillText(t.length > cap ? t.slice(0, cap - 1) + "…" : t, TEXTX, p.y); ctx.globalAlpha = 1;
+              });
+            }
+            return { height, hit, draw };
+          }
+
+          const classicView = {
+            id: "classic", label: "従来表示",
+            canRender: () => true,
+            layout(m, width) {
+              const sts = m.members;
+              const ids = new Set(sts.map((s) => s.id));
+              const rels = relations.filter((r) => ids.has(r.source) && ids.has(r.target));
+              return classicScene(width, sts, rels, [{ id: m.topic.id, label: m.topic.label || "議論", summary: m.topic.summary || "" }]);
+            },
+          };
+
+          const VIEWS = [railsView, subwayView, ibisView, ribbonsView, classicView];
+          const LS_KEY = "transcribe:decisionFlowView:v1";
+          function savedView() { try { return localStorage.getItem(LS_KEY); } catch (e) { return null; } }
+          function saveView(id) { try { localStorage.setItem(LS_KEY, id); } catch (e) { /* private mode */ } }
+
+          // ---- per-topic section with switcher ----
+          function renderSection(model, flow) {
+            const section = document.createElement("div"); section.className = "df-section";
+            const head = document.createElement("div"); head.className = "df-head";
+            const title = document.createElement("span"); title.className = "df-title";
+            title.textContent = model.topic.label || "議論";
+            if (model.topic.id) title.style.color = model.color;
+            head.appendChild(title);
+            if (model.topic.summary) { const sm = document.createElement("span"); sm.className = "df-summary"; sm.textContent = model.topic.summary; head.appendChild(sm); }
+            if (flow && flow.confidence) { const cf = document.createElement("span"); cf.className = "df-conf"; cf.textContent = "確度:" + (CONF_JA[flow.confidence] || flow.confidence); head.appendChild(cf); }
+            section.appendChild(head);
+            const switchBar = document.createElement("div"); switchBar.className = "df-switch";
+            const wrap = document.createElement("div"); wrap.className = "df-canvas-wrap";
+            const canvas = document.createElement("canvas");
+            const note = document.createElement("p"); note.className = "df-note";
+            wrap.appendChild(canvas);
+            section.appendChild(switchBar); section.appendChild(wrap); section.appendChild(note);
+            root.appendChild(section);
+
+            let current = null, scene = null;
+            const widthNow = () => canvas.clientWidth || wrap.clientWidth || root.clientWidth || 900;
+            const available = () => VIEWS.filter((v) => { try { return v.canRender(model, widthNow()); } catch (e) { return false; } });
+            function pick(id, avail) {
+              return avail.find((x) => x.id === id)
+                || avail.find((x) => x.id === "rails")
+                || avail.find((x) => x.id === "classic")
+                || avail[avail.length - 1] || null;
+            }
+            function buildSwitch(avail) {
+              switchBar.textContent = "";
+              switchBar.style.display = avail.length > 1 ? "flex" : "none";
+              avail.forEach((v) => {
+                const b = document.createElement("button"); b.type = "button"; b.textContent = v.label;
+                b.setAttribute("aria-pressed", current && v.id === current.id ? "true" : "false");
+                b.addEventListener("click", () => { saveView(v.id); select(v.id); });
+                switchBar.appendChild(b);
+              });
+            }
+            function redraw(hoverId) { if (!scene) return; const ctx = fitCanvas(canvas, widthNow(), scene.height); scene.draw(ctx, hoverId); }
+            function select(id) {
+              const avail = available();
+              current = pick(id, avail);
+              if (!current) { switchBar.style.display = "none"; note.textContent = "表示できるビューがありません。"; scene = null; return; }
+              try { scene = current.layout(model, widthNow()); }
+              catch (e) { current = classicView; scene = classicView.layout(model, widthNow()); }
+              buildSwitch(avail);
+              redraw(null);
+              if (!flow) note.textContent = "この話題に決定フローは検出されませんでした。従来表示で表示しています。";
+              else note.textContent = scene.note || "";
+            }
+            bindHover(canvas, () => scene, redraw);
+            select(flow ? (savedView() || "rails") : "classic");
+            window.addEventListener("resize", () => select(current ? current.id : (flow ? "rails" : "classic")));
+          }
+
+          function renderPerTopic() {
+            const flowByTopic = new Map(flows.map((f) => [f.topic_id, f]));
+            if (topics.length) {
+              topics.forEach((topic) => {
+                const flow = flowByTopic.get(topic.id) || null;
+                renderSection(buildFlowModel(topic, flow), flow);
+              });
+              // statements outside every topic still get shown (parity with the
+              // whole-panel "その他" lane) instead of silently disappearing.
+              if (statements.some((s) => !topicOf(s))) {
+                renderSection(buildFlowModel({ id: null, label: "その他", summary: "" }, null), null);
+              }
+            } else {
+              const members = statements.slice().sort((a, b) => a.utterance_index - b.utterance_index || idNum(a.id) - idNum(b.id));
+              const model = { topic: { id: null, label: "議論", summary: "" }, color: GRAY, members, rowOf: new Map(members.map((s, i) => [s.id, i])), flow: null };
+              renderSection(model, null);
+            }
+          }
+
+          // ---- whole-panel classic (backward compat: no decision flows) ----
+          function renderWholePanelClassic() {
+            const wrap = document.createElement("div"); wrap.className = "df-canvas-wrap";
+            const canvas = document.createElement("canvas"); wrap.appendChild(canvas); root.appendChild(wrap);
+            const laneDefs = topics.map((t) => ({ id: t.id, label: t.label, summary: t.summary || "" }));
+            if (statements.some((s) => !topicOf(s))) laneDefs.push({ id: null, label: "その他", summary: "" });
+            let scene = null;
+            const widthNow = () => canvas.clientWidth || wrap.clientWidth || 900;
+            function render() { scene = classicScene(widthNow(), statements, relations, laneDefs); const ctx = fitCanvas(canvas, widthNow(), scene.height); scene.draw(ctx, null); }
+            bindHover(canvas, () => scene, (hoverId) => { if (!scene) return; const ctx = fitCanvas(canvas, widthNow(), scene.height); scene.draw(ctx, hoverId); });
+            render();
+            window.addEventListener("resize", render);
+          }
+
+          if (!flows.length) renderWholePanelClassic();
+          else renderPerTopic();
         })();
         </script>
         {% else %}

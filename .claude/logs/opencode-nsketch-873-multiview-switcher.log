@@ -1,0 +1,556 @@
+[0m
+> build · gpt-5.5
+[0m
+[0m→ [0mSkill "context-loader"
+設計相談のみとして進めます。まず共有プロジェクト文脈だけ確認し、実装変更は行いません。
+[0m✱ [0mGlob ".claude/rules/*.md"[90m in . · 0 matches[0m
+[0m✱ [0mGlob ".claude/docs/DESIGN.md"[90m in . · 0 matches[0m
+[0m✱ [0mGlob ".claude/docs/decisions/*.md"[90m in . · 8 matches[0m
+`.claude/rules` と `DESIGN.md` はこのリポジトリには見当たりませんでした。決定フロー可視化の既存メモがあるため、それだけ確認して回答に反映します。
+[0m→ [0mRead .claude/docs/decisions/task-NSKETCH-873-decision_flow_viz.md[90m [limit=2000][0m
+**結論**
+デフォルトは **B: 縦型 git-graph「決定レール」** が最適です。理由は、会議ログの本質である「時間順」を失わず、再訪・保留・未決・ハイブリッド決定に最も強いからです。Sankey は実装可能ですが、v1 では必ず **「帯幅は量を表すものではありません」** の注記を出すべきです。
+
+**1. Renderer Architecture**
+推奨構成は、**共通の正規化モデル + view plugin 方式**です。
+
+```js
+FlowView = {
+  id,
+  label,
+  canRender(model, width),
+  layout(model, width, theme) -> scene,
+  draw(scene, ctx, hoverId),
+}
+```
+
+`hitTest` は各 view が直接持つより、`layout()` が返す `scene.hitRegions[]` を共通処理する方が保守しやすいです。
+
+```js
+scene = {
+  bounds: { width, height },
+  nodes: [{ id, kind, x, y, r, label, meta }],
+  edges: [{ id, from, to, kind, path, meta }],
+  labels: [{ id, x, y, text, maxWidth, meta }],
+  hitRegions: [{ id, kind, shape, meta }],
+  notes: []
+}
+```
+
+共有すべきもの:
+
+- `FlowModel` 正規化: statements/topics/decision_flow を 1 回だけ結合する
+- `statement_id -> utterance_index` の解決
+- option 並び順: `introduced_by` の `utterance_index` 昇順、同値なら `option.id`
+- argument 並び順: `statement_id` の時系列、同値なら `argument.id`
+- topic color: `window.detailTopics.color(topicId)`
+- DPR 対応: `canvas.width = cssWidth * devicePixelRatio`
+- `ResizeObserver` + `requestAnimationFrame` 再描画
+- hover state: `hoverId`
+- tooltip: node/edge/label metadata から共通生成
+- hit testing: `scene.hitRegions` に対する共通最近傍/矩形/パス近似
+- light/dark theme: CSS variables を読み、scene/layout には色トークンだけ渡す
+- label measurement/truncation: `measureText` ベースで共通化
+- empty/refused notes: 共通 UI で描画
+
+view ごとに持つもの:
+
+- `canRender(model, width)`
+- layout geometry
+- edge path construction
+- view-specific legend wording
+- draw style details
+
+Canvas は **1 view ごとに作らない**方がよいです。  
+推奨は **トピックごとに 1 `<canvas>` を持ち、選択中 view だけを描画**です。5 view 分の canvas を DOM に置くと DPR メモリ、resize、pointer 管理が 5 倍になります。
+
+ページ全体を 1 canvas にする案は、トピックごとの高さ・折りたたみ・スクロール同期が難しくなるため非推奨です。既存が topic section 単位なら、**topic section ごとに reusable canvas 1 枚**が最も保守的です。
+
+**2. Deterministic Layout Algorithms**
+**A. Horizontal Fork-Join / Subway**
+用途: 「問い → 複数案 → 収束」の形を直感的に見せる view。  
+弱点: 日本語ラベルと横幅に弱い。
+
+描画条件:
+
+- `options.length >= 2`
+- `options.length <= 4`
+- `width >= 720`
+- outcome がある、または `outcome.status === "open"` を明示できる
+- ラベル列込みで `laneGap >= 44`
+
+座標:
+
+```text
+pad = 24
+xQuestion = pad + 80
+xOptionStart = pad + 240
+xOutcome = width - pad - 120
+usableLaneHeight = max(140, options.length * 56)
+laneGap = clamp(48, usableLaneHeight / max(1, options.length - 1), 84)
+yCenter = top + usableLaneHeight / 2
+yOption[i] = yCenter + (i - (N - 1) / 2) * laneGap
+```
+
+option 順:
+
+```text
+sort by introduced_by.utterance_index asc, then option.id asc
+```
+
+argument の x:
+
+```text
+t = normalize(argument.utterance_index, minTopicTime, maxOutcomeOrTopicTime)
+xArg = xOptionStart + t * (xOutcome - xOptionStart - 80)
+yArg = yOption[optionIndex]
+```
+
+question から option へ:
+
+```text
+cubic:
+M xQuestion,yCenter
+C xQuestion+80,yCenter xOptionStart-80,yOption[i] xOptionStart,yOption[i]
+```
+
+option から outcome へ:
+
+```text
+selected:
+M lastOptionX,yOption[i]
+C xOutcome-120,yOption[i] xOutcome-80,yCenter xOutcome,yCenter
+```
+
+rejected/abandoned は outcome に合流させず、`xOutcome - 80` 付近でフェード終端。
+
+日本語ラベル戦略:
+
+- option label は lane 上に水平表示
+- `maxLabelWidth = min(220, (xOutcome - xOptionStart) * 0.35)`
+- 1 行で入らない場合は 2 行まで
+- 日本語は空白区切りを期待せず、文字単位で `measureText` して分割
+- 2 行でも入らない場合は `…`
+- full text は hover tooltip
+- mobile では refuse して B または current fallback
+
+refuse 条件:
+
+```text
+N > 4
+width < 720
+maxLabelWidth < 120
+estimatedHeight > 360 and topic section is compact
+```
+
+**B. Vertical Git-Graph Decision Rails**
+これを default にします。
+
+意味:
+
+- `y = transcript time`
+- `x = question/outcome spine + option lanes`
+- option rail は導入時点から outcome/終端まで縦に伸びる
+- selected/hybrid は outcome に merge
+- rejected/abandoned は merge せず fade out
+- deferred は parking node
+- open は hollow endpoint
+
+描画条件:
+
+- `options.length >= 1`
+- `options.length <= 5`
+- `width >= 360`
+- mobile でも成立。ただし `width < 640` では label を短縮し、必要なら current fallback + glyph overlay
+
+座標:
+
+```text
+padX = 20
+spineX = 36
+labelReserve = width >= 640 ? 220 : 96
+railAreaWidth = width - spineX - labelReserve - padX
+laneGap = clamp(42, railAreaWidth / max(1, options.length), 110)
+xOption[i] = spineX + laneGap * (i + 1)
+```
+
+y は utterance index を直接 scale するより、**topic 内の関連 statement を時系列 row に並べる**方が読みやすいです。
+
+```text
+rows = unique sorted statement ids used by:
+questions.statement_id
+options.statement_ids
+arguments.statement_id
+outcome.statement_id
+topic.statement_ids as context if current fallback overlay
+
+rowGap = width < 640 ? 38 : 48
+y(rowIndex) = top + 32 + rowIndex * rowGap
+```
+
+argument:
+
+```text
+x = xOption[optionIndex]
+y = y(statement_id)
+glyph:
+pro = "+"
+con = "-"
+neutral = "・"
+```
+
+question:
+
+```text
+x = spineX
+y = y(question.statement_id || first row)
+```
+
+outcome:
+
+```text
+x = spineX
+y = y(outcome.statement_id || last row + 1)
+```
+
+merge connector:
+
+```text
+M xOption[i], yOutcome - 24
+C xOption[i], yOutcome - 8 spineX + 40, yOutcome spineX, yOutcome
+```
+
+status 表現:
+
+```text
+selected: solid merge into outcome
+partial: dashed merge
+rejected: rail fades before outcome, "見送り"
+abandoned: rail fades with shorter opacity, "中断"
+unresolved: hollow endpoint
+deferred outcome: dashed parking connector, "保留"
+open outcome: hollow outcome node, no final merge emphasis
+```
+
+この view は「再訪」に強いです。同じ option への argument が時間を置いて出ても、同じ rail の下方に置くだけで済みます。
+
+**C. IBIS Argument Tree**
+用途: 論点・選択肢・賛否の構造理解。  
+弱点: 実会議は木ではない。時間と収束が弱い。
+
+向きは **top-down** 推奨です。日本語ラベルを横書きで扱いやすく、左-to-right より幅の爆発が少ないです。
+
+描画条件:
+
+- `options.length >= 1`
+- `options.length <= 4`
+- `arguments.length <= 24`
+- `width >= 640`
+- question が最低 1 つある
+
+ツリー構造:
+
+```text
+synthetic root: "論点" if questions.length > 1
+question nodes
+option nodes
+argument nodes
+outcome node is not pure tree child; bottom convergence row
+```
+
+現実の non-tree 対応:
+
+- shared argument は primary parent だけに実体配置
+- primary parent は `option_id` があるならその option
+- relation_ids が複数 option に関係する場合は、最も早い option を primary
+- secondary relation は dashed cross-edge
+- outcome は tree の葉に混ぜず、最下段に単独配置
+- selected options から outcome へ convergence edge
+- multiple questions は synthetic root の children にする
+- question と option の対応が不明なら、全 option を synthetic root 配下に並べる
+
+シンプル post-order subtree width algorithm:
+
+```text
+leaf.width = 1
+node.width = sum(child.width) if children else 1
+children are ordered deterministically
+x cursor accumulates leaf slots left-to-right
+node.x = average(firstChild.x, lastChild.x)
+node.y = depth * levelGap + top
+```
+
+spacing:
+
+```text
+slotWidth = clamp(120, width / leafCount, 220)
+levelGap = 92
+x = pad + slotCenter * slotWidth
+```
+
+子の順序:
+
+```text
+questions: statement time, id
+options: introduced_by time, id
+arguments under option:
+  pro first, neutral second, con third
+  within stance: utterance_index, id
+```
+
+pro/con を混ぜると読みづらいので、option 配下では stance ごとに安定順にします。ただし時間順の意味は薄れるため、tooltip に発話順を出すべきです。
+
+refuse 条件:
+
+```text
+width < 640
+options > 4
+arguments > 24
+leafCount * 96 > width * 2.2
+```
+
+**D. Sankey-Style Converging Ribbons**
+正直に言うと、このデータでは Sankey の「量」を本物として表せません。  
+`decision_flows` には vote 数、重み、発話量、重要度がありません。
+
+推奨:
+
+- ribbon width は **固定幅**
+- 幅で意味を持たせない
+- status/color/opacity/dash で意味を出す
+- visible caveat を必ず表示: `帯の太さは量や重要度を表していません`
+
+もし幅を可変にするなら、唯一許容できるのは **「根拠発言数」**です。
+
+```text
+evidenceCount = option.statement_ids.length + argumentsForOption.length
+ribbonWidth = clamp(5, 4 + sqrt(evidenceCount) * 2, 14)
+legend: "太さは根拠として参照された発言数の目安です"
+```
+
+ただし extractor の品質に依存するため、default にはしない方がよいです。
+
+決定的 ordering:
+
+```text
+questions: time asc
+options: introduced_by time asc, id asc
+selected options: center-near ordering is temptingだが crossing 最小化に見えるため避ける
+そのまま time order
+arguments: option 内で time asc
+outcome: right column center
+```
+
+座標:
+
+```text
+xQuestion = 80
+xOption = width * 0.45
+xOutcome = width - 120
+yQuestion = top + height * 0.5
+yOption[i] = top + 48 + i * laneGap
+yOutcome = top + height * 0.5
+laneGap = clamp(54, usableHeight / max(1, N - 1), 92)
+```
+
+Canvas ribbon path:
+
+```text
+from question to option:
+M xQuestion, yQuestion - w/2
+C xQuestion+120, yQuestion-w/2 xOption-120, yOption-w/2 xOption, yOption-w/2
+L xOption, yOption+w/2
+C xOption-120, yOption+w/2 xQuestion+120, yQuestion+w/2 xQuestion, yQuestion+w/2
+Z
+```
+
+option to outcome も同じ cubic band です。
+
+描画順:
+
+```text
+rejected/abandoned first, low opacity
+unresolved next, dashed outline
+partial next
+selected last, stronger opacity
+node labels last
+```
+
+refuse 条件:
+
+```text
+options > 5
+width < 720
+outcome missing and no open/deferred status
+N == 1 unless user explicitly chooses Sankey
+```
+
+**3. Degradation Strategy**
+`decision_flow` が無い topic:
+
+```text
+A/B/C/D は disabled
+current fallback を表示
+note: この話題に決定フローは検出されませんでした。従来表示で表示しています。
+```
+
+1 option:
+
+```text
+A subway: refuse。分岐がないため
+B rails: render。単一案の検討として成立
+C IBIS: render if arguments exist。なければ current
+D Sankey: refuse。収束リボンの意味が薄い
+```
+
+no outcome / open:
+
+```text
+A subway: render only if open endpoint を右端に描ける。そうでなければ refuse
+B rails: render。open hollow endpoint
+C IBIS: render。outcome row を "未決" にする
+D Sankey: refuse or show open endpoint only。推奨は refuse
+```
+
+no arguments:
+
+```text
+A subway: render。option lanes + outcome だけで成立
+B rails: render。option rails + outcome だけで成立
+C IBIS: weak。option positions だけなら current fallback 推奨
+D Sankey: render only fixed-width, but caveat required
+```
+
+`options.length > 5`:
+
+```text
+A subway: refuse
+B rails: refuse to current + glyph overlay
+C IBIS: refuse
+D Sankey: refuse
+```
+
+mobile `width < 640`:
+
+```text
+A subway: refuse
+B rails: compact render if options <= 3, otherwise current + glyph overlay
+C IBIS: refuse
+D Sankey: refuse
+current fallback: always available
+```
+
+low confidence:
+
+```text
+B rails or current + glyph overlay only
+A/C/D は disabled 推奨
+note: 決定フローの信頼度が低いため、簡略表示にしています。
+```
+
+**4. Switcher UX**
+推奨は **per-topic selector** です。
+
+理由:
+
+- decision_flow の有無が topic ごとに違う
+- option 数や幅で render 可否が topic ごとに違う
+- global selector だと、多くの topic が「この表示は使えません」になりやすい
+- ユーザーは「この話題をどう見るか」を切り替えたい
+
+ただし、最後に選んだ view は global preference として保存してよいです。
+
+```text
+localStorage key:
+transcribe:decisionFlowView:v1
+
+value:
+rails | subway | ibis | ribbons | classic
+```
+
+初期表示:
+
+```text
+decision_flow あり: rails
+decision_flow なし: classic
+localStorage に前回 view があり、その topic で canRender true: それを使う
+前回 view が canRender false: rails -> classic の順で fallback
+```
+
+ボタン順と日本語 label:
+
+```text
+決定レール
+路線図
+IBIS
+リボン
+従来表示
+```
+
+補助文言:
+
+```text
+decision_flow なし:
+この話題に決定フローは検出されませんでした。従来表示で表示しています。
+
+view refuse:
+この表示にはデータまたは表示幅が不足しています。従来表示に切り替えました。
+
+low confidence:
+決定フローの信頼度が低いため、簡略表示にしています。
+
+Sankey:
+帯の太さは量や重要度を表すものではありません。
+```
+
+**5. Default View**
+単一 default は **B: 決定レール**です。
+
+理由:
+
+- transcript order と一致する
+- option の再登場に強い
+- open/deferred/rejected を自然に表せる
+- mobile で最も劣化しにくい
+- 現行の縦型 discourse panel と認知的に近い
+- deterministic layout が簡単
+- 「議論の流れ」と「決定構造」の両方を失わない
+
+Sankey には visible caveat が必要です。
+
+```text
+帯の太さは量や重要度を表すものではありません。
+```
+
+可変幅を採用する場合だけ、文言を変えます。
+
+```text
+帯の太さは根拠として参照された発言数の目安です。重要度や賛同数ではありません。
+```
+
+**6. Risks And V1 Cuts**
+最大リスクは **5 views を同時に入れることで、見た目より保守コストが膨らむこと**です。特に hover、tooltip、label overflow、mobile degradation、dark mode の品質保証が view 数に比例して増えます。
+
+v1 で cut するなら、この順です。
+
+1. **Sankey を cut または experimental 扱い**  
+   量の誤読リスクが高いです。実装しても固定幅 + caveat 必須です。
+
+2. **IBIS を arguments が十分ある時だけ enable**  
+   会議データは clean tree ではないため、常時表示すると cross-edge と duplicate の説明が増えます。
+
+3. **Subway は desktop + options 2-4 限定**  
+   日本語 label と横幅の制約が強く、default には向きません。
+
+4. **v1 core は Rails + Classic に絞る**  
+   plugin interface だけ先に作り、A/C/D は disabled/experimental として後続実装に回すのが最も堅いです。
+
+最終推奨:
+
+```text
+v1 default: 決定レール
+v1 fallback: 従来表示
+v1 optional desktop-only: 路線図
+v1 experimental: IBIS
+v1 defer/cut: Sankey
+```
