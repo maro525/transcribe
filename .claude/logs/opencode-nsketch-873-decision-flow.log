@@ -1,0 +1,681 @@
+[0m
+> build · gpt-5.5
+[0m
+[0m→ [0mSkill "context-loader"
+I’ll load the local project guidance first, then answer as a planning/design consultation only, with no implementation changes.
+[0m✱ [0mGlob ".claude/rules/*.md"[90m in . · 0 matches[0m
+[0m✱ [0mGlob ".claude/docs/DESIGN.md"[90m in . · 0 matches[0m
+No local `.claude` project guidance was found in the current scratchpad, so this is based on the stated constraints and architecture.
+
+**Recommendation**
+Use a new top-level additive layer: `decision_flows[]` keyed by `topic_id`.
+
+Do not mutate `Topic` as the primary model, and do not make statement `role` the core source of truth. Keep `structure.json` v1 valid and renderable, then let the decision layer be optional, partial, and independently discardable.
+
+The best architecture is:
+
+```json
+{
+  "version": 1,
+  "statements": [],
+  "relations": [],
+  "topics": [],
+  "decision_flows": [
+    {
+      "topic_id": "t1",
+      "questions": [
+        {
+          "id": "q1",
+          "summary": "DBは何を使うか?",
+          "statement_id": "s1"
+        }
+      ],
+      "options": [
+        {
+          "id": "o1",
+          "label": "PostgreSQL案",
+          "summary": "既存運用に合わせる",
+          "statement_ids": ["s2", "s5"],
+          "introduced_by": "s2",
+          "status": "selected"
+        },
+        {
+          "id": "o2",
+          "label": "SQLite案",
+          "summary": "軽量に始める",
+          "statement_ids": ["s3", "s6"],
+          "introduced_by": "s3",
+          "status": "rejected"
+        }
+      ],
+      "arguments": [
+        {
+          "id": "a1",
+          "statement_id": "s5",
+          "option_id": "o1",
+          "stance": "pro",
+          "relation_ids": ["r8"]
+        },
+        {
+          "id": "a2",
+          "statement_id": "s6",
+          "option_id": "o2",
+          "stance": "con",
+          "relation_ids": ["r11"]
+        }
+      ],
+      "outcome": {
+        "status": "decided",
+        "kind": "single_option",
+        "summary": "PostgreSQLで進める",
+        "statement_id": "s9",
+        "selected_option_ids": ["o1"],
+        "rationale_statement_ids": ["s5", "s6"]
+      },
+      "confidence": "medium",
+      "warnings": []
+    }
+  ]
+}
+```
+
+Key point: `decision_flows[]` is a derived interpretation layer over statements and relations. It should reference existing IDs, not replace them.
+
+---
+
+**1. Data Model**
+Recommendation: choose **b) new top-level `decision_flows[]`**, with light references into `statements`, `relations`, and `topics`.
+
+Why this is most robust:
+
+- It is additive. Existing v1 files still render because `decision_flows` can be absent.
+- It isolates LLM uncertainty. If the decision-flow extraction is bad, the base discourse graph remains intact.
+- It allows partial success. A topic may have options but no outcome, or an outcome but weak rationale.
+- It avoids polluting the canonical statement model with unstable semantic roles.
+- It supports multiple questions per topic without forcing `Topic` to become a decision container.
+- It is easier to validate locally because all references can be checked against existing `topic_id`, `statement_id`, and `relation_id`.
+
+Why not extend `Topic` directly:
+
+- `Topic` is already a grouping primitive. Adding question, options, and outcome makes it a mixed structural and interpretive object.
+- It creates pressure for every topic to look decision-shaped, which is false for many meetings.
+- It makes schema evolution harder if later you support multiple decision flows per topic.
+
+Why not rely mainly on statement `role`:
+
+- Statement roles are noisy. A single utterance can introduce an option, give a reason, and imply a decision.
+- Role labels invite LLM over-classification.
+- Roles alone do not express grouping, synthesis, abandoned options, or outcome status cleanly.
+- Existing relations already encode part of the argumentative structure, but not enough to identify options and outcomes reliably.
+
+Recommended stance modeling:
+
+- Keep `arguments[]` as the explicit bridge between a statement and an option.
+- Let each argument optionally cite `relation_ids`.
+- Do not derive everything from existing `supports` and `contrasts`.
+- Do not label every statement with a role unless it is purely advisory metadata.
+
+Reason: existing relation types are statement-to-statement, not statement-to-option. A pro or con is usually about an option cluster, not always a single option-introducing statement. However, requiring stance to be derived only from relations is too brittle because LLMs may extract the option correctly but miss the exact support edge.
+
+Best compromise:
+
+- `relations[]` remains the discourse graph source of truth.
+- `decision_flows[].arguments[]` is the decision-specific interpretation.
+- `arguments[].relation_ids` links back when possible.
+- Validators can warn, not fail, when a pro/con argument lacks a matching relation.
+
+Use enum-like strings, not numeric scores, for decision-layer confidence:
+
+```json
+"confidence": "high" | "medium" | "low"
+```
+
+This matches the “no numeric ranges” constraint for structured output.
+
+---
+
+**2. Ontology**
+Recommendation: use **minimal IBIS-inspired ontology**, not full IBIS.
+
+Classic IBIS:
+
+```text
+Issue -> Position -> Argument
+```
+
+This maps well to:
+
+```text
+Question -> Option -> Argument -> Outcome
+```
+
+But full IBIS is too rich for noisy meeting transcripts. Avoid asking the extractor to classify every utterance into fine-grained categories.
+
+Minimal role set:
+
+```text
+question
+option
+argument
+outcome
+```
+
+For arguments:
+
+```text
+stance: pro | con | neutral
+```
+
+For outcomes:
+
+```text
+status: decided | deferred | open | informational
+kind: single_option | hybrid | no_option | unknown
+```
+
+Avoid roles like `clarification`, `constraint`, `risk`, `requirement`, `counterproposal`, `example`, `agreement`, `objection` in the first version. They will look attractive but will reduce consistency.
+
+Handling informational topics:
+
+- `decision_flows` should either omit the topic or include an explicit flow with `outcome.status = "informational"`.
+- I recommend omission by default, with optional `"status": "informational"` only when the extractor is confident the topic is non-decision.
+- UI should treat absence as “classic view only,” not as an error.
+
+Handling multiple questions per topic:
+
+- Allow `questions[]`, not a single `question`.
+- Keep one `decision_flow` per topic initially.
+- If the topic has clearly separate decisions, represent multiple questions inside the same flow rather than multiple flows at first.
+- Later, `decision_flows[]` can support multiple objects with the same `topic_id` if needed.
+
+Handling options that emerge mid-discussion:
+
+- Add `introduced_by`.
+- Preserve `statement_ids` in transcript order.
+- The visualization can place options by first occurrence.
+
+Handling hybrid decisions:
+
+```json
+"outcome": {
+  "status": "decided",
+  "kind": "hybrid",
+  "selected_option_ids": ["o1", "o2"],
+  "summary": "PostgreSQLを基本にしつつ一部SQLiteで検証"
+}
+```
+
+Handling decisions revisited later:
+
+Add a lightweight revision field only when needed:
+
+```json
+"revises_outcome_statement_id": "s9"
+```
+
+Or, more generally:
+
+```json
+"events": [
+  {
+    "type": "reconsidered",
+    "statement_id": "s14",
+    "summary": "先ほどのDB方針を再検討"
+  }
+]
+```
+
+But I would not add `events[]` in v1 unless the current corpus shows this often. For the first design, support revisits by allowing multiple outcome-like statements in `rationale_statement_ids` and using the latest `outcome.statement_id` as the final state.
+
+---
+
+**3. Flow Visualization Patterns**
+Recommendation: primary pattern should be **vertical git-graph style**, with time flowing down and options as parallel rails. Fallback should be **current vertical list plus role glyphs and a fork/join spine**.
+
+Comparison:
+
+**Horizontal fork-join / subway map**
+
+- Strength: visually matches “question -> branches -> decision.”
+- Strength: good for 2-5 options and short labels.
+- Weakness: Japanese labels consume horizontal space.
+- Weakness: 900px width is tight once labels, arrows, and hover targets are included.
+- Weakness: mobile degradation is poor unless it becomes vertical anyway.
+- Weakness: non-linear revisits create crossovers or misleading time compression.
+- Implementation cost: medium.
+
+**Vertical git-graph style**
+
+- Strength: preserves transcript order naturally.
+- Strength: works well with Japanese text because labels can sit to the right.
+- Strength: deterministic and Canvas-friendly.
+- Strength: handles revisits by drawing later statements lower on the same option rail.
+- Strength: mobile degradation is natural because it is already vertical.
+- Weakness: less immediately “fork then converge” than a horizontal diagram.
+- Weakness: many options can consume width.
+- Implementation cost: low to medium.
+
+**IBIS argument map tree**
+
+- Strength: semantically clean.
+- Strength: easy to explain conceptually.
+- Weakness: tree layout is brittle because discussions are not trees.
+- Weakness: cross-links and shared arguments are awkward.
+- Weakness: deterministic tidy tree layout is more work without libraries.
+- Weakness: can overstate certainty.
+- Implementation cost: medium to high.
+
+**Sankey-ish converging ribbons**
+
+- Strength: attractive and communicates volume.
+- Strength: good for summary mode.
+- Weakness: misleading for 3-15 statements because “flow quantity” is artificial.
+- Weakness: Canvas curves, label collision, and hit testing are more complex.
+- Weakness: implies quantitative confidence that the extractor does not have.
+- Implementation cost: high relative to value.
+
+**Current vertical list plus role glyphs + fork/join spine**
+
+- Strength: lowest risk.
+- Strength: reuses current layout and mental model.
+- Strength: degrades perfectly when decision data is incomplete.
+- Weakness: less distinct as a new visualization.
+- Weakness: branching may be subtle.
+- Implementation cost: low.
+
+Primary recommendation: **vertical git-graph style decision rails**.
+
+Visual structure:
+
+```text
+[Question]  DBは何を使うか?
+    |
+    +-- rail A: PostgreSQL案
+    |      pro/con dots in transcript order
+    |
+    +-- rail B: SQLite案
+    |      pro/con dots in transcript order
+    |
+[Outcome]  PostgreSQLで進める
+```
+
+Canvas coordinate model:
+
+- Y-axis: transcript order within the topic.
+- X-axis: semantic lane.
+- Lane 0: question/outcome spine.
+- Lane 1..N: option rails ordered by first introduced statement.
+- Statement nodes appear at y based on `utterance_index`.
+- Option rail starts at `introduced_by`.
+- Option rail ends at outcome y if selected, rejected, abandoned, or unresolved.
+- Arguments appear as small nodes attached to their option rail.
+- Outcome node spans selected rails back to the spine.
+
+Why it best balances constraints:
+
+- Honest about time.
+- Deterministic.
+- Simple geometry.
+- No external layout library.
+- Easy hit testing.
+- Compatible with current vertical sections.
+- Japanese labels can remain horizontal text to the right of nodes.
+- Mobile can collapse lanes into a single left spine with badges.
+
+Fallback presentation:
+
+Use the current vertical list with:
+
+- `?` glyph for question.
+- `A/B/C` pill for option-introducing statements.
+- `+` for pro.
+- `-` for con.
+- `✓` or Japanese text badge for decision.
+- Thin colored left spine connecting related statements.
+- Hover tooltip shows option, stance, outcome, and referenced relations.
+
+Fallback is also the display when:
+
+- More than 5 options.
+- Decision layer confidence is low.
+- Canvas width is under a threshold.
+- Validation emits serious warnings.
+
+---
+
+**4. Convergence Semantics**
+Recommendation: encode outcome status through node shape, color, and rail ending style, while keeping rationale mostly in hover or click-expand.
+
+Suggested visual language:
+
+```text
+decided single option:
+  selected option rail continues into solid outcome node
+  non-selected rails fade or terminate before outcome
+
+decided hybrid:
+  two or more rails merge into outcome node
+  outcome node uses split or braided color accent
+
+deferred:
+  rails merge into a parking-lot node
+  node shape: rounded rectangle with clock-like or pause glyph text
+  line style: dashed
+
+open:
+  no convergence node, or open ring node at bottom
+  rails continue to section end with hollow endpoints
+
+abandoned option:
+  rail terminates with muted stop marker
+  label: 見送り or 却下
+  line style: faded/dotted
+
+revisited decision:
+  earlier outcome node appears as small checkpoint
+  later outcome node is final and visually stronger
+```
+
+Japanese UI labels:
+
+```text
+決定
+一部採用
+保留
+未決
+見送り
+再検討
+```
+
+Relation type colors should not fight outcome colors. I recommend:
+
+- Option rail color identifies option.
+- Argument node fill identifies stance.
+- Edge stroke or small badges identify relation type only on hover or in detailed mode.
+
+Encoding “why” without clutter:
+
+- Default view: show only top 1-3 rationale markers near the outcome.
+- Hover on outcome: show selected rationale statements grouped as `採用理由` and `懸念`.
+- Hover on option: show pros and cons counts plus top statements.
+- Click-expand, if the current page supports interaction state: reveal inline argument rows under each option.
+- If no click state is desired: use tooltip only and keep Canvas static.
+
+Do not draw every support/contrast edge in the decision-flow view by default. The current discourse graph already does that. Decision-flow should summarize convergence, not duplicate the entire argument graph.
+
+---
+
+**5. Extraction Strategy**
+Recommendation: add an optional structured-output section for `decision_flows`, with conservative instructions and strong local validation. The deterministic fallback should usually not produce the decision layer except for very high-confidence marker cases.
+
+Prompt strategy:
+
+Ask the model to extract only decision-shaped topics. Explicitly allow omission.
+
+Important prompt principles:
+
+- “If unsure, omit the decision flow.”
+- “Do not force every topic into a decision.”
+- “Use existing statement IDs only.”
+- “Prefer fewer options over speculative options.”
+- “An option must be an actual proposal, alternative, or candidate answer.”
+- “Arguments must reference statements that discuss a specific option.”
+- “Outcome must be the final or strongest decision-like statement in that topic.”
+- “Use `open` when no clear outcome exists.”
+- “Use `deferred` only when the transcript explicitly postpones.”
+- “Use `hybrid` only when the outcome combines multiple options.”
+
+Schema shape:
+
+```json
+{
+  "decision_flows": [
+    {
+      "topic_id": "string",
+      "questions": [
+        {
+          "id": "string",
+          "summary": "string",
+          "statement_id": "string"
+        }
+      ],
+      "options": [
+        {
+          "id": "string",
+          "label": "string",
+          "summary": "string",
+          "statement_ids": ["string"],
+          "introduced_by": "string",
+          "status": "selected | rejected | abandoned | unresolved | partial"
+        }
+      ],
+      "arguments": [
+        {
+          "id": "string",
+          "statement_id": "string",
+          "option_id": "string",
+          "stance": "pro | con | neutral",
+          "relation_ids": ["string"]
+        }
+      ],
+      "outcome": {
+        "status": "decided | deferred | open",
+        "kind": "single_option | hybrid | no_option | unknown",
+        "summary": "string",
+        "statement_id": "string",
+        "selected_option_ids": ["string"],
+        "rationale_statement_ids": ["string"]
+      },
+      "confidence": "high | medium | low",
+      "warnings": ["string"]
+    }
+  ]
+}
+```
+
+Use `additionalProperties: false` everywhere.
+
+Avoid numeric ranges in the decision layer. Use enums.
+
+Validation rules:
+
+- `topic_id` must exist.
+- All referenced statements must exist.
+- Referenced statements must belong to the same topic.
+- `option.id`, `question.id`, and `argument.id` must be unique within the flow.
+- `introduced_by` must be in the option’s `statement_ids`.
+- Each option must have at least one `statement_id`.
+- Each argument must reference a valid option.
+- `outcome.statement_id`, if present, must belong to the topic.
+- `selected_option_ids` must reference valid options.
+- If `outcome.status = "decided"` and `kind = "single_option"`, require exactly one selected option.
+- If `outcome.status = "decided"` and `kind = "hybrid"`, require at least two selected options.
+- If `outcome.status = "open"`, allow empty selected options.
+- If `outcome.status = "deferred"`, allow empty selected options.
+- If validation fails badly, drop only that decision flow, not the whole structure file.
+- If validation finds minor inconsistency, keep the flow and add `warnings`.
+
+Optional consistency checks:
+
+- Warn if an option has no arguments.
+- Warn if an argument has no matching relation.
+- Warn if a `con` argument cites a `supports` relation.
+- Warn if a selected option has only con arguments.
+- Warn if an outcome appears earlier than most option discussion.
+
+Deterministic fallback:
+
+Recommendation: **default fallback should not produce `decision_flows`**.
+
+Reason:
+
+- Marker-based extraction can detect words like `決定`, but cannot reliably group options and rationale.
+- False positives would produce misleading visual certainty.
+- The fallback’s main contract should be “never crash and render classic structure.”
+
+A very conservative fallback is acceptable only if clearly marked as low confidence:
+
+Question markers:
+
+```text
+〜べきか
+どうする
+どれにする
+どちらにする
+何を使う
+選ぶ
+方針
+検討
+課題
+論点
+```
+
+Option markers:
+
+```text
+A案
+B案
+案として
+選択肢
+候補
+〜という手もある
+〜でいく
+〜を使う
+```
+
+Decision markers:
+
+```text
+決定
+決めましょう
+〜にしましょう
+〜で進める
+採用
+見送り
+保留
+次回
+持ち帰り
+```
+
+But I would only emit a fallback decision flow when:
+
+- A topic has at least one question marker.
+- At least two option markers are present.
+- A decision or defer marker appears later.
+- All detected statements are within the same topic.
+- The output is marked `"confidence": "low"`.
+
+Otherwise, omit the layer and show the classic view.
+
+---
+
+**6. Time Dimension**
+Recommendation: use **time on the y-axis** and semantic stage on the x-axis/lane structure.
+
+Do not use x-axis as raw time in a horizontal fork-join layout. It will compress Japanese labels, punish mobile, and make revisits visually messy.
+
+Best encoding:
+
+- Vertical position reflects transcript order.
+- Horizontal position reflects decision role or option lane.
+- Stage is communicated by node type: question, option introduction, argument, outcome.
+- Logical convergence is shown by rail merges, not by forcing all discussions into a fixed left-to-right timeline.
+
+Handling non-linear revisits:
+
+- Keep the same option rail active across the whole topic.
+- Put revisited option statements lower on the same rail.
+- Draw only local connectors by default.
+- Avoid drawing long cross-topic or cross-lane arrows unless hovered.
+- If an option is abandoned then revived, show a muted checkpoint and resume the same rail below.
+- If a decision is revised, show the earlier outcome as a small checkpoint and the latest outcome as final.
+
+This is exactly where vertical git-graph beats horizontal subway. Git graphs are designed for branching, merging, and revisiting over time.
+
+---
+
+**Overall Architecture**
+Recommended pipeline:
+
+```text
+Transcript
+  -> statements / relations / topics v1
+  -> optional decision_flows interpretation layer
+  -> validation and normalization
+  -> renderer chooses decision-flow view or classic fallback per topic
+```
+
+Data ownership:
+
+```text
+statements:
+  canonical utterance summaries
+
+relations:
+  canonical discourse edges
+
+topics:
+  canonical grouping
+
+decision_flows:
+  optional decision interpretation referencing canonical IDs
+```
+
+Rendering decision:
+
+```text
+if no decision_flows for topic:
+  render classic 議論の構造
+
+if decision_flow invalid:
+  render classic view and ignore flow
+
+if decision_flow low confidence or narrow viewport:
+  render classic view with role glyph overlay
+
+if decision_flow valid and width sufficient:
+  render vertical decision rails
+```
+
+Layout algorithm outline:
+
+```text
+1. Collect topic statements in utterance_index order.
+2. Load decision_flow for topic if present and valid.
+3. Assign option lanes ordered by introduced_by utterance_index.
+4. Reserve lane 0 for question/outcome spine.
+5. Compute y for each statement from transcript order with fixed row height.
+6. Compute x for each lane from available width and option count.
+7. Draw faint topic spine.
+8. Draw question node near its statement y, or at top if no statement_id.
+9. Draw each option rail from introduced_by y to outcome y or last member y.
+10. Draw option introduction nodes with labels.
+11. Draw argument nodes on the option rail using stance glyphs.
+12. Draw outcome node at outcome statement y or bottom of topic.
+13. Draw convergence connectors from selected option rails to outcome.
+14. Draw rejected or abandoned rail endings.
+15. Build hit regions for question, option, argument, and outcome nodes.
+16. On hover, show full utterance, option grouping, rationale, and linked relations.
+```
+
+Canvas geometry defaults:
+
+```text
+rowHeight: 42-56px depending on label density
+leftPadding: 24px
+spineX: 36px
+laneGap: clamp(42px, availableWidth / (optionCount + 2), 120px)
+labelX: max lane x + 24px
+max options before fallback: 5
+mobile threshold: around 640px
+```
+
+Final recommendation:
+
+- Model decision-flow as optional top-level `decision_flows[]`.
+- Use minimal IBIS-inspired concepts: question, option, argument, outcome.
+- Keep stance as decision-layer interpretation with optional links to existing relations.
+- Render primary view as vertical git-graph decision rails.
+- Use classic vertical list plus glyphs as fallback.
+- Omit decision-flow in deterministic fallback unless marker evidence is exceptionally strong.
+- Preserve time vertically, because meeting discussions are temporal and revisited non-linearly.

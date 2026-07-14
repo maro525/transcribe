@@ -27,6 +27,14 @@ from typing import Any, Iterable, Protocol
 STRUCTURE_KIND = "logical_structure"
 RELATION_TYPES = ("supports", "causes", "elaborates", "contrasts")
 
+# Decision-flow layer enums (D1). Kept as enum sets because structured output
+# cannot express numeric ranges; unknown values are dropped in validation.
+OPTION_STATUS = ("selected", "rejected", "abandoned", "unresolved", "partial")
+OUTCOME_STATUS = ("decided", "deferred", "open")
+OUTCOME_KIND = ("single_option", "hybrid", "no_option", "unknown")
+ARG_STANCE = ("pro", "con", "neutral")
+FLOW_CONFIDENCE = ("high", "medium", "low")
+
 # Topic clustering knobs (deterministic; no env dependence for testability).
 _TOPIC_MIN_EDGE_WEIGHT = 2  # prune co-occurrence edges seen fewer times
 _TOPIC_MAX_COMPONENT = 12  # larger components get label propagation
@@ -71,6 +79,7 @@ class Relation:
     type: str  # one of RELATION_TYPES
     confidence: float
     evidence: dict[str, str] = field(default_factory=dict)
+    id: str = ""  # stable ref for decision_flows arguments; set at assembly
 
 
 @dataclass(frozen=True)
@@ -81,6 +90,70 @@ class Topic:
     summary: str = ""  # 1-line "what was discussed" (LLM path; "" otherwise)
 
 
+# --- Decision-flow layer (D1): derived per-topic interpretation of the
+# canonical statements/relations. Every field references existing ids and is
+# additive; a v1 payload simply omits ``decision_flows``. ------------------
+
+
+@dataclass(frozen=True)
+class Question:
+    """The core question / agenda a topic must decide."""
+
+    id: str
+    summary: str
+    statement_id: str | None = None
+
+
+@dataclass(frozen=True)
+class Option:
+    """A competing idea / candidate answer to a question."""
+
+    id: str
+    label: str
+    summary: str = ""
+    statement_ids: tuple[str, ...] = ()
+    introduced_by: str | None = None
+    status: str = "unresolved"  # one of OPTION_STATUS
+
+
+@dataclass(frozen=True)
+class Argument:
+    """A pro/con/neutral point about one option — the decision-layer view of a
+    discourse relation; ``relation_ids`` back-links to relations when possible."""
+
+    id: str
+    statement_id: str
+    option_id: str
+    stance: str  # one of ARG_STANCE
+    relation_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Outcome:
+    """How a question converged (decided / deferred / open)."""
+
+    status: str  # one of OUTCOME_STATUS
+    kind: str = "unknown"  # one of OUTCOME_KIND
+    summary: str = ""
+    statement_id: str | None = None
+    selected_option_ids: tuple[str, ...] = ()
+    rationale_statement_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DecisionFlow:
+    """Per-topic flow: question -> competing options -> convergence. References
+    canonical statement/relation/topic ids; never replaces them."""
+
+    topic_id: str
+    questions: tuple[Question, ...] = ()
+    options: tuple[Option, ...] = ()
+    arguments: tuple[Argument, ...] = ()
+    outcome: Outcome | None = None
+    confidence: str = "medium"  # one of FLOW_CONFIDENCE
+    warnings: tuple[str, ...] = ()
+
+
 @dataclass(frozen=True)
 class DiscourseExtraction:
     """What a RelationExtractor returns (topics may be empty -> clustered
@@ -89,6 +162,7 @@ class DiscourseExtraction:
     statements: tuple[Statement, ...]
     relations: tuple[Relation, ...]
     topics: tuple[Topic, ...] = ()
+    decision_flows: tuple[DecisionFlow, ...] = ()
 
 
 class RelationExtractor(Protocol):
@@ -493,10 +567,13 @@ def validate_extraction(
         if member_ids and topic.label:
             kept_topics.append(replace(topic, statement_ids=member_ids))
 
+    # decision_flows are validated separately (validate_decision_flows) after
+    # relation ids exist; pass them through untouched here.
     return DiscourseExtraction(
         statements=tuple(kept_statements),
         relations=tuple(kept_relations),
         topics=tuple(kept_topics),
+        decision_flows=extraction.decision_flows,
     )
 
 
@@ -551,6 +628,241 @@ def _find_cycle(relations: list[Relation]) -> list[Relation] | None:
 
 
 # ---------------------------------------------------------------------------
+# Decision-flow layer: id numbering + fail-soft validation (D2)
+# ---------------------------------------------------------------------------
+
+
+def _assign_relation_ids(relations: list[Relation]) -> list[Relation]:
+    """Give every relation a stable ``id`` used by decision_flows arguments.
+
+    LLM-provided ids are kept when non-empty and unique (so the model's own
+    ``relation_ids`` references keep resolving); the rest get deterministic
+    ``r{n}`` ids that avoid collisions. Deterministic in list order.
+    """
+    counts: dict[str, int] = {}
+    for relation in relations:
+        if relation.id:
+            counts[relation.id] = counts.get(relation.id, 0) + 1
+    keepable = {rid for rid, n in counts.items() if n == 1}
+    used = set(keepable)
+    counter = 0
+
+    def next_id() -> str:
+        nonlocal counter
+        while True:
+            counter += 1
+            candidate = f"r{counter}"
+            if candidate not in used:
+                used.add(candidate)
+                return candidate
+
+    out: list[Relation] = []
+    for relation in relations:
+        if relation.id and relation.id in keepable:
+            out.append(relation)
+        else:
+            out.append(replace(relation, id=next_id()))
+    return out
+
+
+def validate_decision_flows(
+    flows: Iterable[DecisionFlow],
+    statements: list[Statement],
+    topics: list[Topic],
+    relations: list[Relation],
+) -> list[DecisionFlow]:
+    """Fail-soft validation of the derived decision-flow layer (D2).
+
+    A *hard* violation (bad reference, duplicate id, unknown enum, broken
+    outcome cardinality) drops the **whole flow** — the base structure always
+    survives. *Soft* inconsistencies are appended to that flow's ``warnings``
+    and the flow is kept. Deterministic; never raises on noisy input.
+    """
+    topic_ids = {t.id for t in topics}
+    stmt_topic: dict[str, str] = {}
+    for topic in topics:
+        for sid in topic.statement_ids:
+            stmt_topic.setdefault(sid, topic.id)
+    for statement in statements:
+        if statement.topic_id and statement.id not in stmt_topic:
+            stmt_topic[statement.id] = statement.topic_id
+    stmt_ids = {s.id for s in statements}
+    utt_index = {s.id: s.utterance_index for s in statements}
+    rel_ids = {r.id for r in relations if r.id}
+    rel_type = {r.id: r.type for r in relations if r.id}
+
+    kept: list[DecisionFlow] = []
+    for flow in flows:
+        cleaned = _validate_one_flow(
+            flow, topic_ids, stmt_topic, stmt_ids, utt_index, rel_ids, rel_type
+        )
+        if cleaned is not None:
+            kept.append(cleaned)
+    return kept
+
+
+def _validate_one_flow(
+    flow: DecisionFlow,
+    topic_ids: set[str],
+    stmt_topic: dict[str, str],
+    stmt_ids: set[str],
+    utt_index: dict[str, int],
+    rel_ids: set[str],
+    rel_type: dict[str, str],
+) -> DecisionFlow | None:
+    if flow.topic_id not in topic_ids:
+        return None
+
+    def in_topic(sid: str | None) -> bool:
+        # a referenced statement must exist AND belong to this flow's topic
+        return bool(sid) and sid in stmt_ids and stmt_topic.get(sid) == flow.topic_id
+
+    # --- enum validity (hard: unknown -> drop, never render garbage) ---
+    if flow.confidence not in FLOW_CONFIDENCE:
+        return None
+    if any(o.status not in OPTION_STATUS for o in flow.options):
+        return None
+    if any(a.stance not in ARG_STANCE for a in flow.arguments):
+        return None
+    if flow.outcome is not None and (
+        flow.outcome.status not in OUTCOME_STATUS
+        or flow.outcome.kind not in OUTCOME_KIND
+    ):
+        return None
+
+    # --- entity ids must be present (blank ids would silently collide) ---
+    if any(not (q.id or "").strip() for q in flow.questions):
+        return None
+    if any(not (o.id or "").strip() for o in flow.options):
+        return None
+    if any(not (a.id or "").strip() for a in flow.arguments):
+        return None
+
+    # --- id uniqueness within the flow (hard) ---
+    q_ids = [q.id for q in flow.questions]
+    o_ids = [o.id for o in flow.options]
+    a_ids = [a.id for a in flow.arguments]
+    for id_list in (q_ids, o_ids, a_ids):
+        if len(id_list) != len(set(id_list)):
+            return None
+    option_ids = set(o_ids)
+
+    # --- reference integrity (hard) ---
+    for question in flow.questions:
+        if question.statement_id is not None and not in_topic(question.statement_id):
+            return None
+    for option in flow.options:
+        if not option.statement_ids:
+            return None
+        if not all(in_topic(sid) for sid in option.statement_ids):
+            return None
+        if (
+            option.introduced_by is not None
+            and option.introduced_by not in option.statement_ids
+        ):
+            return None
+    for argument in flow.arguments:
+        if argument.option_id not in option_ids or not in_topic(argument.statement_id):
+            return None
+    if flow.outcome is not None:
+        outcome = flow.outcome
+        if outcome.statement_id is not None and not in_topic(outcome.statement_id):
+            return None
+        if any(oid not in option_ids for oid in outcome.selected_option_ids):
+            return None
+        if any(not in_topic(sid) for sid in outcome.rationale_statement_ids):
+            return None
+        selected = len(outcome.selected_option_ids)
+        if outcome.status == "decided" and outcome.kind == "single_option" and selected != 1:
+            return None
+        if outcome.status == "decided" and outcome.kind == "hybrid" and selected < 2:
+            return None
+
+    # --- soft checks -> warnings (keep the flow) ---
+    warnings = list(flow.warnings)
+    args_by_option: dict[str, list[Argument]] = {}
+    for argument in flow.arguments:
+        args_by_option.setdefault(argument.option_id, []).append(argument)
+    for option in flow.options:
+        if option.id not in args_by_option:
+            warnings.append(f"option {option.id} has no argument")
+    for argument in flow.arguments:
+        if argument.relation_ids and not any(r in rel_ids for r in argument.relation_ids):
+            warnings.append(f"argument {argument.id} references no known relation")
+        if argument.stance == "con" and any(
+            rel_type.get(r) == "supports" for r in argument.relation_ids
+        ):
+            warnings.append(f"con argument {argument.id} cites a supports relation")
+    if flow.outcome is not None:
+        for oid in flow.outcome.selected_option_ids:
+            stances = {a.stance for a in args_by_option.get(oid, [])}
+            if stances == {"con"}:
+                warnings.append(f"selected option {oid} has only con arguments")
+        if flow.outcome.statement_id in utt_index:
+            outcome_t = utt_index[flow.outcome.statement_id]
+            option_times = [
+                utt_index[sid]
+                for option in flow.options
+                for sid in option.statement_ids
+                if sid in utt_index
+            ]
+            if option_times and outcome_t < min(option_times):
+                warnings.append("outcome precedes option discussion")
+
+    return replace(flow, warnings=tuple(warnings))
+
+
+def _serialize_decision_flows(flows: list[DecisionFlow]) -> list[dict[str, Any]]:
+    """Wire form of the decision-flow layer (mirrors D1's JSON)."""
+    def outcome_dict(outcome: Outcome | None) -> dict[str, Any] | None:
+        if outcome is None:
+            return None
+        return {
+            "status": outcome.status,
+            "kind": outcome.kind,
+            "summary": outcome.summary,
+            "statement_id": outcome.statement_id,
+            "selected_option_ids": list(outcome.selected_option_ids),
+            "rationale_statement_ids": list(outcome.rationale_statement_ids),
+        }
+
+    return [
+        {
+            "topic_id": flow.topic_id,
+            "questions": [
+                {"id": q.id, "summary": q.summary, "statement_id": q.statement_id}
+                for q in flow.questions
+            ],
+            "options": [
+                {
+                    "id": o.id,
+                    "label": o.label,
+                    "summary": o.summary,
+                    "statement_ids": list(o.statement_ids),
+                    "introduced_by": o.introduced_by,
+                    "status": o.status,
+                }
+                for o in flow.options
+            ],
+            "arguments": [
+                {
+                    "id": a.id,
+                    "statement_id": a.statement_id,
+                    "option_id": a.option_id,
+                    "stance": a.stance,
+                    "relation_ids": list(a.relation_ids),
+                }
+                for a in flow.arguments
+            ],
+            "outcome": outcome_dict(flow.outcome),
+            "confidence": flow.confidence,
+            "warnings": list(flow.warnings),
+        }
+        for flow in flows
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Payload assembly
 # ---------------------------------------------------------------------------
 
@@ -595,7 +907,10 @@ def build_structure(
         # LLM returns membership on topics; mirror it onto each statement so
         # the detail-page lanes/treemap can group by statement.topic_id.
         statements = _assign_topic_ids(statements, topics)
-    relations = break_cycles(list(extraction.relations))
+    relations = _assign_relation_ids(break_cycles(list(extraction.relations)))
+    decision_flows = validate_decision_flows(
+        list(extraction.decision_flows), statements, topics, relations
+    )
 
     return {
         "kind": STRUCTURE_KIND,
@@ -622,6 +937,7 @@ def build_structure(
         ],
         "relations": [
             {
+                "id": r.id,
                 "source": r.source,
                 "target": r.target,
                 "type": r.type,
@@ -639,6 +955,7 @@ def build_structure(
             }
             for t in topics
         ],
+        "decision_flows": _serialize_decision_flows(decision_flows),
         "extractors": [used.describe()],
     }
 

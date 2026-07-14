@@ -10,8 +10,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.discourse import (  # noqa: E402
+    Argument,
+    DecisionFlow,
     DiscourseExtraction,
     FallbackRelationExtractor,
+    Option,
+    Outcome,
+    Question,
     Relation,
     Statement,
     Topic,
@@ -20,6 +25,7 @@ from src.discourse import (  # noqa: E402
     build_structure,
     cluster_topics,
     split_statements,
+    validate_decision_flows,
     validate_extraction,
 )
 
@@ -227,6 +233,233 @@ def test_build_structure_accepts_segment_like_objects():
     payload = build_structure(segs, NoneExtractor())
     assert payload["utterances"][0]["speaker"] == "A"
     assert len(payload["statements"]) >= 2
+
+
+# ---------------------------------------------------------------------------
+# Decision-flow layer (NSKETCH-873)
+# ---------------------------------------------------------------------------
+
+
+def _flow_fixture(*, option_status_b="rejected", **flow_overrides):
+    """A valid single-topic decision flow + its backing extraction/utterances.
+
+    Returns (utterances, extraction). s1=question, s2/s3=options A/B,
+    s4=pro-A argument, s5=outcome — all in topic t1."""
+    utts = [_utt(i, "A", f"発話{i}") for i in range(5)]
+    statements = (
+        Statement("s1", 0, "A", "DBは何を使うか"),
+        Statement("s2", 1, "A", "PostgreSQL案"),
+        Statement("s3", 2, "B", "SQLite案"),
+        Statement("s4", 3, "A", "運用実績がある"),
+        Statement("s5", 4, "A", "PostgreSQLで進める"),
+    )
+    topics = (Topic("t1", "DB選定", ("s1", "s2", "s3", "s4", "s5")),)
+    flow = DecisionFlow(
+        topic_id="t1",
+        questions=(Question("q1", "DBは何を使うか", "s1"),),
+        options=(
+            Option("o1", "PostgreSQL案", "", ("s2",), "s2", "selected"),
+            Option("o2", "SQLite案", "", ("s3",), "s3", option_status_b),
+        ),
+        arguments=(Argument("a1", "s4", "o1", "pro"),),
+        outcome=Outcome(
+            "decided", "single_option", "PostgreSQLで進める", "s5", ("o1",), ("s4",)
+        ),
+        confidence="medium",
+    )
+    flow = _replace_flow(flow, **flow_overrides)
+    extraction = DiscourseExtraction(
+        statements=statements, relations=(), topics=topics, decision_flows=(flow,)
+    )
+    return utts, extraction
+
+
+def _replace_flow(flow, **overrides):
+    from dataclasses import replace
+
+    return replace(flow, **overrides) if overrides else flow
+
+
+def test_decision_flow_valid_passthrough_and_serialization():
+    utts, extraction = _flow_fixture()
+    payload = build_structure(utts, FakeExtractor(extraction))
+    flows = payload["decision_flows"]
+    assert len(flows) == 1
+    flow = flows[0]
+    assert flow["topic_id"] == "t1"
+    assert [o["id"] for o in flow["options"]] == ["o1", "o2"]
+    assert flow["outcome"]["status"] == "decided"
+    assert flow["outcome"]["selected_option_ids"] == ["o1"]
+    assert flow["confidence"] == "medium"
+    # o2 has no argument -> soft warning, flow kept
+    assert any("o2" in w for w in flow["warnings"])
+    json.dumps(payload)  # serializable
+
+
+def test_decision_flow_dropped_on_cross_topic_reference():
+    utts, extraction = _flow_fixture()
+    # add a second topic owning s3, but the option still lives in flow t1
+    extraction = DiscourseExtraction(
+        statements=extraction.statements,
+        relations=extraction.relations,
+        topics=(
+            Topic("t1", "DB選定", ("s1", "s2", "s4", "s5")),
+            Topic("t2", "別の話題", ("s3",)),
+        ),
+        decision_flows=extraction.decision_flows,
+    )
+    payload = build_structure(utts, FakeExtractor(extraction))
+    # option o2 references s3 which now belongs to t2 -> whole flow dropped
+    assert payload["decision_flows"] == []
+
+
+def test_decision_flow_dropped_on_duplicate_ids():
+    utts, extraction = _flow_fixture()
+    flow = extraction.decision_flows[0]
+    dup = _replace_flow(
+        flow,
+        options=(
+            Option("o1", "A", "", ("s2",), "s2", "selected"),
+            Option("o1", "B", "", ("s3",), "s3", "rejected"),  # duplicate id
+        ),
+    )
+    extraction = DiscourseExtraction(
+        statements=extraction.statements,
+        relations=(),
+        topics=extraction.topics,
+        decision_flows=(dup,),
+    )
+    payload = build_structure(utts, FakeExtractor(extraction))
+    assert payload["decision_flows"] == []
+
+
+def test_decision_flow_dropped_on_bad_enum():
+    utts, extraction = _flow_fixture()
+    flow = extraction.decision_flows[0]
+    bad = _replace_flow(
+        flow, outcome=Outcome("bogus", "single_option", "", "s5", ("o1",), ())
+    )
+    extraction = DiscourseExtraction(
+        statements=extraction.statements,
+        relations=(),
+        topics=extraction.topics,
+        decision_flows=(bad,),
+    )
+    assert build_structure(utts, FakeExtractor(extraction))["decision_flows"] == []
+
+
+def test_decision_flow_dropped_on_introduced_by_not_in_statements():
+    utts, extraction = _flow_fixture()
+    flow = extraction.decision_flows[0]
+    bad = _replace_flow(
+        flow,
+        options=(
+            Option("o1", "A", "", ("s2",), "s5", "selected"),  # introduced_by not in ids
+            Option("o2", "B", "", ("s3",), "s3", "rejected"),
+        ),
+    )
+    extraction = DiscourseExtraction(
+        statements=extraction.statements,
+        relations=(),
+        topics=extraction.topics,
+        decision_flows=(bad,),
+    )
+    assert build_structure(utts, FakeExtractor(extraction))["decision_flows"] == []
+
+
+def test_decision_flow_single_option_cardinality_enforced():
+    utts, extraction = _flow_fixture()
+    flow = extraction.decision_flows[0]
+    # decided + single_option but TWO selected -> dropped
+    bad = _replace_flow(
+        flow,
+        outcome=Outcome("decided", "single_option", "", "s5", ("o1", "o2"), ()),
+    )
+    extraction = DiscourseExtraction(
+        statements=extraction.statements,
+        relations=(),
+        topics=extraction.topics,
+        decision_flows=(bad,),
+    )
+    assert build_structure(utts, FakeExtractor(extraction))["decision_flows"] == []
+
+
+def test_relation_ids_assigned_and_deterministic():
+    utts = [_utt(0, "A", "採用する。"), _utt(1, "A", "なぜなら速いからだ。")]
+    extraction = DiscourseExtraction(
+        statements=(
+            Statement("s1", 0, "A", "採用する"),
+            Statement("s2", 1, "A", "速い"),
+        ),
+        relations=(Relation("s2", "s1", "supports", 0.9),),
+        topics=(Topic("t1", "採用", ("s1", "s2")),),
+    )
+    a = build_structure(utts, FakeExtractor(extraction))
+    b = build_structure(utts, FakeExtractor(extraction))
+    assert a["relations"][0]["id"] == "r1"
+    assert [r["id"] for r in a["relations"]] == [r["id"] for r in b["relations"]]
+
+
+def test_decision_flows_backward_compatible_when_absent():
+    utts = [_utt(0, "A", "設計の話")]
+    extraction = DiscourseExtraction(
+        statements=(Statement("s1", 0, "A", "設計"),),
+        relations=(),
+        topics=(Topic("t1", "設計", ("s1",)),),
+    )  # no decision_flows
+    payload = build_structure(utts, FakeExtractor(extraction))
+    assert payload["decision_flows"] == []
+
+
+def test_validate_decision_flows_drops_unknown_topic():
+    flow = DecisionFlow(topic_id="ghost", options=(Option("o1", "A", "", ("s1",), "s1"),))
+    statements = [Statement("s1", 0, "A", "x", topic_id="t1")]
+    topics = [Topic("t1", "T", ("s1",))]
+    assert validate_decision_flows([flow], statements, topics, []) == []
+
+
+def test_decision_flow_dropped_on_blank_entity_id():
+    utts, extraction = _flow_fixture()
+    flow = extraction.decision_flows[0]
+    bad = _replace_flow(
+        flow,
+        options=(
+            Option("", "A", "", ("s2",), "s2", "selected"),  # blank id -> drop flow
+            Option("o2", "B", "", ("s3",), "s3", "rejected"),
+        ),
+    )
+    extraction = DiscourseExtraction(
+        statements=extraction.statements, relations=(), topics=extraction.topics,
+        decision_flows=(bad,),
+    )
+    assert build_structure(utts, FakeExtractor(extraction))["decision_flows"] == []
+
+
+def test_decision_flow_hybrid_cardinality():
+    utts, extraction = _flow_fixture()
+    flow = extraction.decision_flows[0]
+    # decided + hybrid with TWO selected -> kept
+    ok = _replace_flow(
+        flow,
+        options=(
+            Option("o1", "A", "", ("s2",), "s2", "selected"),
+            Option("o2", "B", "", ("s3",), "s3", "partial"),
+        ),
+        arguments=(Argument("a1", "s4", "o1", "pro"), Argument("a2", "s5", "o2", "pro")),
+        outcome=Outcome("decided", "hybrid", "両案採用", "s5", ("o1", "o2"), ()),
+    )
+    kept = build_structure(
+        utts,
+        FakeExtractor(DiscourseExtraction(extraction.statements, (), extraction.topics, (ok,))),
+    )["decision_flows"]
+    assert len(kept) == 1 and kept[0]["outcome"]["kind"] == "hybrid"
+    # ...but hybrid with only ONE selected -> dropped
+    bad = _replace_flow(ok, outcome=Outcome("decided", "hybrid", "", "s5", ("o1",), ()))
+    dropped = build_structure(
+        utts,
+        FakeExtractor(DiscourseExtraction(extraction.statements, (), extraction.topics, (bad,))),
+    )["decision_flows"]
+    assert dropped == []
 
 
 if __name__ == "__main__":

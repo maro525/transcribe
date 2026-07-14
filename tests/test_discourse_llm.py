@@ -137,6 +137,76 @@ def test_schema_all_objects_closed():
     check(discourse_llm.EXTRACTION_SCHEMA)
 
 
+PAYLOAD_WITH_FLOW = {
+    **VALID_PAYLOAD,
+    "decision_flows": [
+        {
+            "topic_id": "t1",
+            "questions": [{"id": "q1", "summary": "設計方針", "statement_id": "s1"}],
+            "options": [
+                {
+                    "id": "o1",
+                    "label": "案A",
+                    "summary": "",
+                    "statement_ids": ["s1"],
+                    "introduced_by": "s1",
+                    "status": "selected",
+                },
+                {
+                    "id": "o2",
+                    "label": "案B",
+                    "summary": "",
+                    "statement_ids": ["s2"],
+                    "introduced_by": None,
+                    "status": "rejected",
+                },
+            ],
+            "arguments": [
+                {"id": "a1", "statement_id": "s2", "option_id": "o1", "stance": "pro"}
+            ],
+            "outcome": {
+                "status": "decided",
+                "kind": "single_option",
+                "summary": "案Aで",
+                "statement_id": "s2",
+                "selected_option_ids": ["o1"],
+                "rationale_statement_ids": ["s2"],
+            },
+            "confidence": "high",
+        }
+    ],
+}
+
+
+def test_extract_parses_decision_flows():
+    ext = discourse_llm.ClaudeDiscourseExtractor(client=FakeClient(PAYLOAD_WITH_FLOW))
+    result = ext.extract(UTTS)
+    assert result is not None
+    assert len(result.decision_flows) == 1
+    flow = result.decision_flows[0]
+    assert flow.topic_id == "t1"
+    assert [o.id for o in flow.options] == ["o1", "o2"]
+    assert flow.options[1].introduced_by is None
+    assert flow.outcome.status == "decided"
+    assert flow.confidence == "high"
+
+
+def test_extract_without_decision_flows_yields_empty():
+    ext = discourse_llm.ClaudeDiscourseExtractor(client=FakeClient(VALID_PAYLOAD))
+    result = ext.extract(UTTS)
+    assert result is not None and result.decision_flows == ()
+
+
+def test_malformed_decision_flow_does_not_break_base_extraction():
+    payload = {**VALID_PAYLOAD, "decision_flows": [{"topic_id": "t1"}, "garbage", 42]}
+    ext = discourse_llm.ClaudeDiscourseExtractor(client=FakeClient(payload))
+    result = ext.extract(UTTS)
+    # base layer still parses; the one dict-shaped flow survives, junk skipped
+    assert result is not None
+    assert {s.id for s in result.statements} == {"s1", "s2"}
+    assert len(result.decision_flows) == 1
+
+
 def test_select_extractor_without_key_is_fallback():
     saved = os.environ.pop("ANTHROPIC_API_KEY", None)
     try:
