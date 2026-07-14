@@ -4,7 +4,8 @@
 - linear_id: NSKETCH-883
 - tier: M
 - created: 2026-07-14
-- status: implementing
+- status: completed
+- deployed: 2026-07-14
 
 ## Brief
 
@@ -47,6 +48,7 @@
 - `[startproject] POST` — Plan complete; Linear comment posted to NSKETCH-883.
 - `[team-implement] POST` — 2026-07-14 implemented on `feature/nsketch-883-batch-strong-mode`; py_compile OK; new tests 15/15; full suite 145/145 no regression.
 - `[team-review] POST` — 2026-07-14 PASS. 4-perspective review (Claude/Security/Simplify + OpenCode gpt-5.5); full suite 145/145, all success criteria verified. 0 critical/0 major. Minor follow-ups: `.env`-timing for BATCH_WHISPER_MODE (env-var only, consistent w/ existing behavior; README note added), invalid-mode error diagnostics. `.claude/rules/security.md` not present in repo.
+- `[deploy] POST` — 2026-07-14 feature branch pushed, PR #12 created + merged to main (fast-forward). Task file Deploy section filled; status → completed. Linear NSKETCH-883 ready for status update (coordinate with user/Linear integration).
 
 ## Design
 
@@ -145,4 +147,36 @@ Rejected alternatives: `WHISPER_MODEL=auto` sentinel (breaks the "value is a rea
 3. CPU-degrade ready log contains two em-dashes (cosmetic).
 
 ## Deploy
-<!-- deploy が記入 -->
+
+### デプロイ結果: SUCCESS
+
+### 実行内容
+- デプロイ日時: 2026-07-14T
+- feature ブランチ: feature/nsketch-883-batch-strong-mode
+- PR: https://github.com/hidemaro-nsketch/transcribe/pull/12
+- マージ完了: YES (main へ fast-forward merge)
+
+### コミット履歴
+```
+8dc65a2 docs(review): NSKETCH-883 review PASS + env-var-only note for BATCH_WHISPER_MODE
+33f77df feat(batch): strong/accuracy mode via BATCH_WHISPER_MODE (NSKETCH-883)
+```
+
+### デプロイ後検証結果
+
+#### テスト実行
+- full suite: 145/145 PASS (no regression)
+- new resolver tests: 15/15 PASS (torch-free, deterministic)
+- py_compile: OK
+
+#### ロジック変更検証
+- config resolver: deterministic, pure function (cuda_available parameter)
+- worker startup: resolves mode correctly, ready log updated with reason
+- CPU fallback: strong/max on CPU degrades to medium with explicit reason
+
+### 申し送り事項
+1. **GPU accuracy validation pending**: Real-audio GPU validation required by user (this env has no GPU/audio/models)
+2. **BATCH_WHISPER_MODE env-var only**: Read at import time before .env loading (documented in README)
+3. **Minor cosmetic notes** (pre-approved, non-blocking):
+   - Invalid-mode error shows normalized value
+   - Ready log contains two em-dashes (cosmetic)
