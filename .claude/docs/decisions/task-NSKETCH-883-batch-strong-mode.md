@@ -46,6 +46,7 @@
 - `[startproject] PRE` — 2026-07-14 startproject Phase 1–3 executed (tier=M, OpenCode consulted). DONT-ASK MODE: Gate 1 auto-approved.
 - `[startproject] POST` — Plan complete; Linear comment posted to NSKETCH-883.
 - `[team-implement] POST` — 2026-07-14 implemented on `feature/nsketch-883-batch-strong-mode`; py_compile OK; new tests 15/15; full suite 145/145 no regression.
+- `[team-review] POST` — 2026-07-14 PASS. 4-perspective review (Claude/Security/Simplify + OpenCode gpt-5.5); full suite 145/145, all success criteria verified. 0 critical/0 major. Minor follow-ups: `.env`-timing for BATCH_WHISPER_MODE (env-var only, consistent w/ existing behavior; README note added), invalid-mode error diagnostics. `.claude/rules/security.md` not present in repo.
 
 ## Design
 
@@ -121,7 +122,27 @@ Rejected alternatives: `WHISPER_MODEL=auto` sentinel (breaks the "value is a rea
 - Transcription ACCURACY not verifiable in this environment (no GPU/audio/models); real-audio GPU validation is a required user follow-up (stated in PR body).
 
 ## Review
-<!-- team-review が記入 -->
+
+**Verdict: PASS** (2026-07-14, tier=M — Claude/Security/Simplify perspectives + OpenCode gpt-5.5)
+
+| Criterion | Result |
+|---|---|
+| Explicit `WHISPER_MODEL` always wins (zero behavior change) | PASS |
+| Unset everything → `medium` (identical to before) | PASS |
+| CPU + strong/max degrades to `medium` with reason | PASS |
+| Invalid mode fails fast via startup-failed path | PASS |
+| `config.py` stays torch-free (verified at runtime) | PASS |
+| No other consumers of `config.WHISPER_MODEL` broken by `None` | PASS (sole consumer worker.py:43, None-safe) |
+| Ready log shows resolved model + reason | PASS |
+
+- Tests: 145/145 across 13 modules green (new resolver matrix 15/15); no regression.
+- Security: no secrets; `resolved.reason` → dashboard via Jinja2 autoescape (no XSS); operator-trusted env boundary. Note: `.claude/rules/security.md` absent in repo — general secure-coding checks applied.
+- OpenCode "major" items dissolved on verification (no other WHISPER_MODEL consumers; test env-dependence documented + consistent with `_runner` convention).
+
+**Minor follow-ups (non-blocking)**
+1. `BATCH_WHISPER_MODE` is read at import time, before `load_dotenv()` — works only as a real env var, not from `.env` (consistent with pre-existing `WHISPER_MODEL` behavior). → README doc note added post-review.
+2. Invalid-mode error shows normalized value, not raw input (diagnostic nit).
+3. CPU-degrade ready log contains two em-dashes (cosmetic).
 
 ## Deploy
 <!-- deploy が記入 -->
