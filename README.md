@@ -19,9 +19,10 @@ input/ (音声を配置)
    │  watcher が 30 秒間隔で監視
    ▼
 worker (同期スレッド)
-   │  1. Whisper で文字起こし
-   │  2. pyannote で話者分離
-   │  3. formatter で話者ラベル付き整形
+   │  1. Whisper で全体を書き起こし（word timestamps）
+   │  2. pyannote で全体を話者分離
+   │  3. 単語×話者ターンのアライン（align.py、最大オーバーラップ）
+   │  4. formatter で話者ラベル付き整形
    ▼
 output/ (書き起こし .txt) + done/ (処理済み音声を移動)
    ▲
@@ -41,7 +42,8 @@ FastAPI Web ダッシュボード (ジョブ状態をリアルタイム表示)
 │   ├── auth.py                 # HuggingFace トークン読み込み
 │   ├── watcher.py              # input/ フォルダ監視
 │   ├── worker.py               # 監視 → 文字起こし → 保存のパイプライン
-│   ├── transcriber.py          # Whisper + pyannote 実行
+│   ├── transcriber.py          # Whisper 全体デコード（word timestamps）+ pyannote 全体話者分離
+│   ├── align.py                # 単語→話者の割り当て（純粋・依存なし、whisperX 方式）
 │   ├── formatter.py            # 話者ラベル付き整形・保存
 │   ├── models.py               # バッチ用モデルロード / 共有レジストリ / デバイス判定
 │   ├── status.py               # StatusStore（ジョブ状態のインメモリ管理）
@@ -166,6 +168,7 @@ python main.py
 | `WHISPER_MODEL` | （未設定） | 使用する Whisper モデルを明示指定（例 `medium` / `large-v3`）。設定時は常に優先され `BATCH_WHISPER_MODE` を無視。未設定時は `BATCH_WHISPER_MODE` に従う（既定 `medium`） |
 | `BATCH_WHISPER_MODE` | `light` | バッチのモデル階層。`light`=`medium`（既定）/ `strong`=`large-v3-turbo` / `max`=`large-v3`。`strong`/`max` は GPU オプトイン。CUDA 非搭載ホストでは `medium` にフォールバックし、起動ログに理由を表示。`WHISPER_MODEL` 未設定時のみ参照。※起動時に環境変数として読み込むため、`.env` ファイルではなく実環境変数で指定すること |
 | `NUM_SPEAKERS` | `2` | 話者分離で想定する話者数 |
+| `BATCH_CONDITION_ON_PREVIOUS_TEXT` | `0`（無効） | ASR-first のバッチ全体デコードで、前ウィンドウのテキストを次の推論条件に含めるか。既定は無効（長い日本語会議での繰り返しループ対策）。`0`/`false`/空 以外の値で有効 |
 | `WEB_HOST` | `127.0.0.1` | ダッシュボードのバインドホスト |
 | `WEB_PORT` | `8000` | ダッシュボードのポート |
 | `TRANSCRIBE_BASE_DIR` | `.`（カレント） | `input/`・`output/`・`done/` などの基準ディレクトリ |
