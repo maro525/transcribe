@@ -4,7 +4,7 @@
 - linear_id: none (Linear起票なし・ユーザー指示)
 - tier: M
 - created: 2026-07-16
-- status: planning
+- status: done
 
 ## Brief
 detail.html「議論の構造」パネルの classic ビュー（左: 点＋矢印の2カラム / 右: テキスト）を、
@@ -64,4 +64,7 @@ detail.html「議論の構造」パネルの classic ビュー（左: 点＋矢�
 - 結果: PASS
 
 ## Deploy
-<!-- deploy が記入 -->
+- branch: feature/organic-structure-network
+- commit: 44461dc feat(web): organic network canvas for logical-structure panel
+- PR: https://github.com/hidemaro-nsketch/transcribe/pull/14
+- Linear 投稿: なし（起票なし・ユーザー指示）
