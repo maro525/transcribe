@@ -475,11 +475,14 @@
             抽出: {{ structure.extractors[0].name if structure.extractors else "?" }}{% if structure.extractors and structure.extractors[0].model %}（{{ structure.extractors[0].model }}）{% endif %}
         </p>
         <script>
-        // Decision-flow multi-view panel (NSKETCH-873). A shared, deterministic
-        // (no Math.random, no physics) plugin framework: buildFlowModel() joins
-        // the topic + decision_flow once, each view exposes canRender/layout, and
-        // one shared hit-tester drives hover/tooltip for every view. No decision
-        // flows -> the classic whole-panel renderer runs unchanged (backward compat).
+        // Decision-flow multi-view panel (NSKETCH-873) + organic network canvas.
+        // A shared, deterministic plugin framework: buildFlowModel() joins the
+        // topic + decision_flow once, each view exposes canRender/layout, and
+        // one shared hit-tester drives hover/tooltip for every view. The old
+        // 2-column "classic" view is replaced by networkScene(): a seeded,
+        // synchronously-relaxed force layout (no Math.random, no rAF loop) that
+        // draws statements as dot+caption nodes inside soft topic blobs. No
+        // decision flows -> one whole-panel network canvas renders everything.
         (() => {
           const dataEl = document.getElementById("structure-data");
           const root = document.getElementById("structure-root");
@@ -944,14 +947,54 @@
             },
           };
 
-          // --- classic: the existing depth-indented view (per topic / whole) ---
-          function classicScene(width, sts, rels, laneDefs) {
-            // Constants kept identical to the pre-refactor classic renderer so
-            // no-decision-flow jobs draw exactly as before (backward compat).
-            const LEFT = 20, DSTEP = 30, MAXD = 5;
-            const ARROWW = LEFT + MAXD * DSTEP, TEXTX = ARROWW + 16;
-            const ROWH = 30, HEAD = 44, GAP = 12, TOP = 6, RAD = 5;
-            const REL = { supports: "#1a7f37", causes: "#0969da", elaborates: "#8b949e", contrasts: "#d97706" };
+          // --- network: organic graphic-recording canvas (replaces classic) ----
+          // One free-form canvas: each statement is a node (colored dot + short
+          // caption), relations are organic curved arrows, topics become soft
+          // cluster blobs. Deterministic: seeded PRNG (no Math.random) and the
+          // force relaxation runs synchronously inside layout(), so the scene
+          // stays static afterwards — hover only redraws, like every view.
+          function mulberry32(seed) {
+            let a = seed >>> 0;
+            return () => {
+              a = (a + 0x6d2b79f5) >>> 0;
+              let t = a;
+              t = Math.imul(t ^ (t >>> 15), t | 1);
+              t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+              return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+            };
+          }
+          const NET_FONT = '"Hiragino Maru Gothic ProN","Yu Gothic UI",system-ui,sans-serif';
+          const REL_COLOR = { supports: "#1a7f37", causes: "#0969da", elaborates: "#8b949e", contrasts: "#d97706" };
+          const REL_JA = { supports: "支持", causes: "因果", elaborates: "補足", contrasts: "対比" };
+          // Char-count width estimate (layout has no ctx): fullwidth ~= font px.
+          function estWidth(text, px) {
+            let w = 0;
+            for (let i = 0; i < text.length; i++) w += text.charCodeAt(i) > 0x2000 ? px : px * 0.55;
+            return w;
+          }
+          function wrapLabel(text, px, maxW, maxLines) {
+            const lines = [];
+            let cur = "";
+            for (let i = 0; i < (text || "").length; i++) {
+              const ch = text[i];
+              if (estWidth(cur + ch, px) > maxW) {
+                lines.push(cur);
+                if (lines.length === maxLines) {
+                  lines[maxLines - 1] = lines[maxLines - 1].slice(0, -1) + "…";
+                  return lines;
+                }
+                cur = ch;
+              } else cur += ch;
+            }
+            if (cur) lines.push(cur);
+            return lines.length ? lines : [""];
+          }
+
+          function networkScene(width, sts, rels, laneDefs, opts) {
+            // opts.showTitles=false: per-topic switcher mode — the df-head
+            // already shows the topic label/summary, skip in-canvas titles.
+            const showTitles = !opts || opts.showTitles !== false;
+            const LABEL_PX = 11, LABEL_W = 92, LABEL_LINES = 2, MARGIN_X = 56, MARGIN_TOP = 46, MARGIN_BOT = 26;
             const laneIds = laneDefs.map((l) => l.id);
             const hasNull = laneIds.indexOf(null) !== -1;
             const laneOf = (s) => {
@@ -960,94 +1003,275 @@
               return hasNull ? null : t;
             };
             const stset = new Set(sts.map((s) => s.id));
-            const incoming = new Map();
-            rels.forEach((r) => {
-              if (!stset.has(r.source) || !stset.has(r.target)) return;
-              if (!incoming.has(r.target)) incoming.set(r.target, []);
-              incoming.get(r.target).push(r.source);
+            const edges = rels.filter((r) => stset.has(r.source) && stset.has(r.target));
+            const degree = new Map();
+            edges.forEach((r) => {
+              degree.set(r.source, (degree.get(r.source) || 0) + 1);
+              degree.set(r.target, (degree.get(r.target) || 0) + 1);
             });
-            const dcache = new Map();
-            function depth(id, stack) {
-              if (dcache.has(id)) return dcache.get(id);
-              stack = stack || new Set(); if (stack.has(id)) return 0; stack.add(id);
-              let d = 0; (incoming.get(id) || []).forEach((s) => { d = Math.max(d, 1 + depth(s, stack)); });
-              stack.delete(id); dcache.set(id, d); return d;
-            }
-            const pos = new Map(), sections = []; let y = TOP;
+
+            // Clusters (only lanes with members), laid out serpentine by lane
+            // order so the reading direction still roughly follows time.
+            const clusters = [];
             laneDefs.forEach((lane) => {
               const members = sts.filter((s) => laneOf(s) === lane.id);
               if (!members.length) return;
-              y += GAP;
-              // Match old summaryFor(): explicit topic summary, else a derived
-              // join of the first two member statements (fallback/clustered path
-              // topics carry no summary — without this their line vanishes).
               const summary = lane.summary || members.slice(0, 2).map((s) => s.text).join(" / ");
-              sections.push({ label: lane.label, color: lane.id != null ? color(lane.id) : GRAY, summary, y });
-              y += HEAD;
-              members.forEach((s) => { const d = Math.min(depth(s.id), MAXD); pos.set(s.id, { x: LEFT + d * DSTEP, y: y + ROWH / 2, s }); y += ROWH; });
+              clusters.push({
+                id: lane.id, label: lane.label, summary,
+                color: lane.id != null ? color(lane.id) : GRAY, members,
+              });
             });
-            const height = y + 12;
+            const cols = clamp(1, Math.floor(width / 340), clusters.length);
+            const rows = Math.ceil(clusters.length / cols) || 1;
+            const maxMembers = clusters.reduce((mx, cl) => Math.max(mx, cl.members.length), 1);
+            const cellW = width / Math.max(1, Math.min(cols, clusters.length));
+            const cellH = clamp(240, 130 + Math.ceil(Math.sqrt(maxMembers)) * 62, 560);
+            const height = rows * cellH + MARGIN_TOP + MARGIN_BOT;
+
+            const rng = mulberry32((sts.length * 2654435761 + edges.length * 97 + clusters.length) >>> 0);
+            const nodes = new Map(); // id -> {x,y,vx,vy,r,cluster,s,lines}
+            clusters.forEach((cl, k) => {
+              const row = Math.floor(k / cols);
+              const col = row % 2 ? (cols - 1) - (k % cols) : k % cols;
+              cl.ax = clamp(MARGIN_X + 60, (col + 0.5) * cellW + (rng() - 0.5) * 30, width - MARGIN_X - 60);
+              cl.ay = MARGIN_TOP + (row + 0.5) * cellH + (rng() - 0.5) * 24;
+              const phase = rng() * Math.PI * 2;
+              cl.members.forEach((s, i) => {
+                const ang = phase + i * 2.3999632; // golden angle spiral by time
+                const rad = 16 * Math.sqrt(i + 0.6) + rng() * 10;
+                nodes.set(s.id, {
+                  x: cl.ax + Math.cos(ang) * rad, y: cl.ay + Math.sin(ang) * rad,
+                  vx: 0, vy: 0, cluster: cl, s,
+                  r: 4.5 + Math.min(degree.get(s.id) || 0, 5) * 1.1,
+                  lines: wrapLabel(s.text || "", LABEL_PX, LABEL_W, LABEL_LINES),
+                });
+              });
+            });
+
+            // Springs: typed relations + a faint chronological thread inside
+            // each cluster (keeps sparse clusters from collapsing to a blob).
+            const springs = edges.map((r) => ({ a: r.source, b: r.target, rest: 118, k: 0.012 }));
+            clusters.forEach((cl) => {
+              for (let i = 1; i < cl.members.length; i++) {
+                springs.push({ a: cl.members[i - 1].id, b: cl.members[i].id, rest: 88, k: 0.004 });
+              }
+            });
+
+            const list = Array.from(nodes.values());
+            const iters = clamp(90, Math.round(26000 / Math.max(1, list.length)), 300);
+            for (let it = 0; it < iters; it++) {
+              for (let i = 0; i < list.length; i++) {
+                for (let j = i + 1; j < list.length; j++) {
+                  const a = list[i], b = list[j];
+                  let dx = a.x - b.x, dy = a.y - b.y;
+                  let d2 = dx * dx + dy * dy;
+                  if (d2 < 1) { dx = rng() - 0.5; dy = rng() - 0.5; d2 = 1; }
+                  const d = Math.sqrt(d2);
+                  const f = 5600 / d2;
+                  a.vx += (dx / d) * f; a.vy += (dy / d) * f;
+                  b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
+                  const minD = 68; // dot + 2-line caption breathing room
+                  if (d < minD) {
+                    const push = (minD - d) * 0.22;
+                    a.vx += (dx / d) * push; a.vy += (dy / d) * push;
+                    b.vx -= (dx / d) * push; b.vy -= (dy / d) * push;
+                  }
+                }
+              }
+              springs.forEach((sp) => {
+                const a = nodes.get(sp.a), b = nodes.get(sp.b);
+                if (!a || !b) return;
+                const dx = b.x - a.x, dy = b.y - a.y;
+                const d = Math.sqrt(dx * dx + dy * dy) || 1;
+                const f = (d - sp.rest) * sp.k;
+                a.vx += (dx / d) * f; a.vy += (dy / d) * f;
+                b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
+              });
+              list.forEach((n) => {
+                n.vx += (n.cluster.ax - n.x) * 0.011;
+                n.vy += (n.cluster.ay - n.y) * 0.016;
+                n.vx *= 0.8; n.vy *= 0.8;
+                n.x = clamp(MARGIN_X, n.x + n.vx, width - MARGIN_X);
+                n.y = clamp(MARGIN_TOP + 18, n.y + n.vy, height - MARGIN_BOT - 22);
+              });
+            }
+
+            // Precompute organic blob outlines + label anchor per cluster.
+            clusters.forEach((cl) => {
+              let cx = 0, cy = 0;
+              cl.members.forEach((s) => { const n = nodes.get(s.id); cx += n.x; cy += n.y; });
+              cx /= cl.members.length; cy /= cl.members.length;
+              let maxR = 30;
+              cl.members.forEach((s) => {
+                const n = nodes.get(s.id);
+                maxR = Math.max(maxR, Math.hypot(n.x - cx, n.y - cy) + 34);
+              });
+              const K = 10, pts = [];
+              const wob = 0.08 + rng() * 0.06, phase = rng() * Math.PI * 2;
+              for (let i = 0; i < K; i++) {
+                const ang = (i / K) * Math.PI * 2;
+                const rr = maxR * (1 + wob * Math.sin(ang * 3 + phase)) + rng() * 8;
+                pts.push({ x: cx + Math.cos(ang) * rr, y: cy + Math.sin(ang) * rr * 0.82 });
+              }
+              cl.blob = pts; cl.cx = cx; cl.cy = cy;
+              cl.topY = Math.min.apply(null, pts.map((p) => p.y));
+            });
+
             function relTip(id) {
               const out = [];
-              rels.forEach((r) => {
+              edges.forEach((r) => {
                 if (r.source !== id && r.target !== id) return;
-                const o = pos.get(r.source === id ? r.target : r.source); if (!o) return;
+                const o = nodes.get(r.source === id ? r.target : r.source); if (!o) return;
                 const dir = r.source === id ? "→" : "←";
                 const marker = r.evidence && r.evidence.marker ? "「" + r.evidence.marker + "」" : "";
-                out.push(r.type + " " + dir + " " + (o.s.text || "").slice(0, 20) + (marker ? " " + marker : ""));
+                out.push((REL_JA[r.type] || r.type) + " " + dir + " " + (o.s.text || "").slice(0, 20) + (marker ? " " + marker : ""));
               });
               return out;
             }
             const hit = [];
-            pos.forEach((p, id) => hit.push({ x: p.x, y: p.y, r: 12, id: "s:" + id, lines: [stmtTip(id)].concat(relTip(id)) }));
-            function arrow(ctx, a, b, col, conf) {
-              ctx.strokeStyle = col; ctx.fillStyle = col; ctx.globalAlpha = 0.35 + conf * 0.5; ctx.lineWidth = 1 + conf;
-              line(ctx, a.x, a.y, b.x, b.y);
-              const ang = Math.atan2(b.y - a.y, b.x - a.x), sz = 7;
-              ctx.beginPath(); ctx.moveTo(b.x, b.y);
-              ctx.lineTo(b.x - sz * Math.cos(ang - 0.45), b.y - sz * Math.sin(ang - 0.45));
-              ctx.lineTo(b.x - sz * Math.cos(ang + 0.45), b.y - sz * Math.sin(ang + 0.45));
-              ctx.closePath(); ctx.fill(); ctx.globalAlpha = 1;
+            nodes.forEach((n, id) => hit.push({
+              x: n.x, y: n.y, r: Math.max(n.r + 7, 14), id: "s:" + id,
+              lines: [stmtTip(id)].concat(relTip(id)),
+            }));
+
+            function blobPath(ctx, pts) {
+              ctx.beginPath();
+              for (let i = 0; i < pts.length; i++) {
+                const p = pts[i], q = pts[(i + 1) % pts.length];
+                const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2;
+                if (i === 0) ctx.moveTo(mx, my); else ctx.quadraticCurveTo(p.x, p.y, mx, my);
+              }
+              const p0 = pts[0], pl = pts[pts.length - 1];
+              ctx.quadraticCurveTo(pl.x, pl.y, (pl.x + p0.x) / 2, (pl.y + p0.y) / 2);
+              ctx.closePath();
             }
+            // Per-edge deterministic bend so curves stay organic yet stable.
+            const bends = edges.map((r, i) => {
+              const h = (i * 2654435761) >>> 0;
+              return ((h % 37) - 18) * 1.8;
+            });
+            function edgeGeom(r, i) {
+              const a = nodes.get(r.source), b = nodes.get(r.target);
+              const dx = b.x - a.x, dy = b.y - a.y;
+              const d = Math.sqrt(dx * dx + dy * dy) || 1;
+              const nx = -dy / d, ny = dx / d;
+              const bend = Math.abs(bends[i]) < 10 ? (bends[i] < 0 ? -14 : 14) : bends[i];
+              return { a, b, cx: (a.x + b.x) / 2 + nx * bend, cy: (a.y + b.y) / 2 + ny * bend };
+            }
+
             function draw(ctx, hoverId) {
-              const c = ink(); ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
-              sections.forEach((sec) => {
-                ctx.fillStyle = sec.color; ctx.font = "600 13px sans-serif"; ctx.fillText(sec.label, 4, sec.y + 14);
-                if (sec.summary) {
-                  ctx.fillStyle = c; ctx.globalAlpha = 0.7; ctx.font = "12px sans-serif";
-                  const cap = Math.max(12, Math.floor((width - 16) / 12));
-                  ctx.fillText(sec.summary.length > cap ? sec.summary.slice(0, cap - 1) + "…" : sec.summary, 4, sec.y + 32);
+              const c = ink();
+              ctx.lineCap = "round"; ctx.lineJoin = "round";
+              // Topic blobs + hand-drawn-ish titles.
+              clusters.forEach((cl) => {
+                blobPath(ctx, cl.blob);
+                ctx.fillStyle = cl.color; ctx.globalAlpha = 0.06; ctx.fill();
+                ctx.strokeStyle = cl.color; ctx.globalAlpha = 0.35; ctx.lineWidth = 1.4;
+                ctx.setLineDash([1, 5]); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+                if (!showTitles) return;
+                const title = cl.label + "（" + cl.members.length + "）";
+                const ty = Math.max(14, cl.topY - 8);
+                ctx.fillStyle = cl.color; ctx.font = "600 13px " + NET_FONT;
+                ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+                ctx.fillText(truncate(ctx, title, cellW - 24), cl.cx, ty);
+                const tw = Math.min(ctx.measureText(title).width, cellW - 24);
+                ctx.strokeStyle = cl.color; ctx.globalAlpha = 0.5; ctx.lineWidth = 1.6;
+                ctx.beginPath();
+                ctx.moveTo(cl.cx - tw / 2, ty + 3);
+                ctx.quadraticCurveTo(cl.cx - tw / 4, ty + 6, cl.cx, ty + 3.5);
+                ctx.quadraticCurveTo(cl.cx + tw / 4, ty + 1.5, cl.cx + tw / 2, ty + 4);
+                ctx.stroke(); ctx.globalAlpha = 1;
+                if (cl.summary) {
+                  ctx.fillStyle = c; ctx.globalAlpha = 0.55; ctx.font = "10px " + NET_FONT;
+                  ctx.textBaseline = "top";
+                  ctx.fillText(truncate(ctx, cl.summary, cellW - 30), cl.cx, ty + 7);
                   ctx.globalAlpha = 1;
                 }
-                ctx.strokeStyle = c; ctx.globalAlpha = 0.12; ctx.lineWidth = 1;
-                line(ctx, 0, sec.y + HEAD - 3, width, sec.y + HEAD - 3); ctx.globalAlpha = 1;
               });
-              rels.forEach((r) => { const a = pos.get(r.source), b = pos.get(r.target); if (!a || !b) return; arrow(ctx, a, b, REL[r.type] || REL.elaborates, r.confidence || 0.5); });
-              ctx.textBaseline = "middle";
-              pos.forEach((p, id) => {
-                const hov = ("s:" + id) === hoverId;
-                dot(ctx, p.x, p.y, hov ? RAD + 2 : RAD, hov ? "#d4a72c" : "#1a7f37");
-                const avail = Math.floor((width - TEXTX - 8) / 12), cap = Math.max(6, Math.min(28, avail));
-                const t = p.s.text || ""; ctx.fillStyle = c; ctx.globalAlpha = hov ? 1 : 0.85;
-                ctx.font = (hov ? "600 " : "") + "13px sans-serif";
-                ctx.fillText(t.length > cap ? t.slice(0, cap - 1) + "…" : t, TEXTX, p.y); ctx.globalAlpha = 1;
+              // Chronological thread (dotted, very faint) inside each cluster.
+              ctx.strokeStyle = c; ctx.globalAlpha = 0.1; ctx.lineWidth = 1;
+              ctx.setLineDash([1, 4]);
+              clusters.forEach((cl) => {
+                if (cl.members.length < 2) return;
+                ctx.beginPath();
+                cl.members.forEach((s, i) => {
+                  const n = nodes.get(s.id);
+                  if (i === 0) ctx.moveTo(n.x, n.y); else ctx.lineTo(n.x, n.y);
+                });
+                ctx.stroke();
               });
+              ctx.setLineDash([]); ctx.globalAlpha = 1;
+              // Relation curves with arrowheads.
+              edges.forEach((r, i) => {
+                const g = edgeGeom(r, i);
+                const col = REL_COLOR[r.type] || REL_COLOR.elaborates;
+                const conf = r.confidence == null ? 0.5 : r.confidence;
+                const active = hoverId === "s:" + r.source || hoverId === "s:" + r.target;
+                ctx.strokeStyle = col; ctx.fillStyle = col;
+                ctx.globalAlpha = active ? 0.95 : 0.28 + conf * 0.38;
+                ctx.lineWidth = (active ? 1 : 0) + 1 + conf * 1.2;
+                ctx.setLineDash(r.type === "contrasts" ? [5, 4] : []);
+                ctx.beginPath(); ctx.moveTo(g.a.x, g.a.y);
+                ctx.quadraticCurveTo(g.cx, g.cy, g.b.x, g.b.y);
+                ctx.stroke(); ctx.setLineDash([]);
+                // Arrowhead just outside the target dot, along curve tangent.
+                const ang = Math.atan2(g.b.y - g.cy, g.b.x - g.cx);
+                const tipX = g.b.x - Math.cos(ang) * (g.b.r + 2);
+                const tipY = g.b.y - Math.sin(ang) * (g.b.r + 2);
+                const sz = 6.5;
+                ctx.beginPath(); ctx.moveTo(tipX, tipY);
+                ctx.lineTo(tipX - sz * Math.cos(ang - 0.5), tipY - sz * Math.sin(ang - 0.5));
+                ctx.lineTo(tipX - sz * Math.cos(ang + 0.5), tipY - sz * Math.sin(ang + 0.5));
+                ctx.closePath(); ctx.fill();
+                ctx.globalAlpha = 1;
+              });
+              // Nodes: colored dot + caption right below (the "text+dot pair").
+              nodes.forEach((n, id) => {
+                const hov = hoverId === "s:" + id;
+                if (hov) {
+                  ctx.fillStyle = n.cluster.color; ctx.globalAlpha = 0.18;
+                  ctx.beginPath(); ctx.arc(n.x, n.y, n.r + 7, 0, Math.PI * 2); ctx.fill();
+                  ctx.globalAlpha = 1;
+                }
+                dot(ctx, n.x, n.y, hov ? n.r + 1.5 : n.r, n.cluster.color, "#fff");
+                ctx.fillStyle = c; ctx.globalAlpha = hov ? 1 : 0.86;
+                ctx.font = (hov ? "600 " : "") + LABEL_PX + "px " + NET_FONT;
+                ctx.textAlign = "center"; ctx.textBaseline = "top";
+                n.lines.forEach((ln, li) => ctx.fillText(ln, n.x, n.y + n.r + 4 + li * (LABEL_PX + 2)));
+                ctx.globalAlpha = 1;
+              });
+              // Mini legend for relation types actually present (top-right).
+              const types = [];
+              edges.forEach((r) => { const t = REL_COLOR[r.type] ? r.type : "elaborates"; if (types.indexOf(t) === -1) types.push(t); });
+              if (types.length) {
+                ctx.font = "10px " + NET_FONT; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+                let lx = width - 8 - types.length * 58;
+                types.forEach((t) => {
+                  ctx.strokeStyle = REL_COLOR[t]; ctx.globalAlpha = 0.85; ctx.lineWidth = 2;
+                  ctx.setLineDash(t === "contrasts" ? [4, 3] : []);
+                  line(ctx, lx, 10, lx + 16, 10); ctx.setLineDash([]);
+                  ctx.fillStyle = c; ctx.globalAlpha = 0.7;
+                  ctx.fillText(REL_JA[t], lx + 20, 10);
+                  ctx.globalAlpha = 1; lx += 58;
+                });
+              }
             }
             return { height, hit, draw };
           }
 
-          const classicView = {
-            id: "classic", label: "従来表示",
+          const networkView = {
+            id: "network", label: "ネットワーク",
             canRender: () => true,
             layout(m, width) {
               const sts = m.members;
               const ids = new Set(sts.map((s) => s.id));
               const rels = relations.filter((r) => ids.has(r.source) && ids.has(r.target));
-              return classicScene(width, sts, rels, [{ id: m.topic.id, label: m.topic.label || "議論", summary: m.topic.summary || "" }]);
+              return networkScene(width, sts, rels, [{ id: m.topic.id, label: m.topic.label || "議論", summary: m.topic.summary || "" }], { showTitles: false });
             },
           };
 
-          const VIEWS = [railsView, subwayView, ibisView, ribbonsView, classicView];
+          const VIEWS = [railsView, subwayView, ibisView, ribbonsView, networkView];
           const LS_KEY = "transcribe:decisionFlowView:v1";
           function savedView() { try { return localStorage.getItem(LS_KEY); } catch (e) { return null; } }
           function saveView(id) { try { localStorage.setItem(LS_KEY, id); } catch (e) { /* private mode */ } }
@@ -1075,9 +1299,10 @@
             const widthNow = () => canvas.clientWidth || wrap.clientWidth || root.clientWidth || 900;
             const available = () => VIEWS.filter((v) => { try { return v.canRender(model, widthNow()); } catch (e) { return false; } });
             function pick(id, avail) {
+              if (id === "classic") id = "network"; // migrate pre-refresh saved choice
               return avail.find((x) => x.id === id)
                 || avail.find((x) => x.id === "rails")
-                || avail.find((x) => x.id === "classic")
+                || avail.find((x) => x.id === "network")
                 || avail[avail.length - 1] || null;
             }
             function buildSwitch(avail) {
@@ -1096,15 +1321,15 @@
               current = pick(id, avail);
               if (!current) { switchBar.style.display = "none"; note.textContent = "表示できるビューがありません。"; scene = null; return; }
               try { scene = current.layout(model, widthNow()); }
-              catch (e) { current = classicView; scene = classicView.layout(model, widthNow()); }
+              catch (e) { current = networkView; scene = networkView.layout(model, widthNow()); }
               buildSwitch(avail);
               redraw(null);
-              if (!flow) note.textContent = "この話題に決定フローは検出されませんでした。従来表示で表示しています。";
+              if (!flow) note.textContent = "この話題に決定フローは検出されませんでした。ネットワーク表示しています。";
               else note.textContent = scene.note || "";
             }
             bindHover(canvas, () => scene, redraw);
-            select(flow ? (savedView() || "rails") : "classic");
-            window.addEventListener("resize", () => select(current ? current.id : (flow ? "rails" : "classic")));
+            select(flow ? (savedView() || "rails") : "network");
+            window.addEventListener("resize", () => select(current ? current.id : (flow ? "rails" : "network")));
           }
 
           function renderPerTopic() {
@@ -1126,21 +1351,21 @@
             }
           }
 
-          // ---- whole-panel classic (backward compat: no decision flows) ----
-          function renderWholePanelClassic() {
+          // ---- whole-panel network (no decision flows): one free canvas ----
+          function renderWholePanelNetwork() {
             const wrap = document.createElement("div"); wrap.className = "df-canvas-wrap";
             const canvas = document.createElement("canvas"); wrap.appendChild(canvas); root.appendChild(wrap);
             const laneDefs = topics.map((t) => ({ id: t.id, label: t.label, summary: t.summary || "" }));
             if (statements.some((s) => !topicOf(s))) laneDefs.push({ id: null, label: "その他", summary: "" });
             let scene = null;
             const widthNow = () => canvas.clientWidth || wrap.clientWidth || 900;
-            function render() { scene = classicScene(widthNow(), statements, relations, laneDefs); const ctx = fitCanvas(canvas, widthNow(), scene.height); scene.draw(ctx, null); }
+            function render() { scene = networkScene(widthNow(), statements, relations, laneDefs); const ctx = fitCanvas(canvas, widthNow(), scene.height); scene.draw(ctx, null); }
             bindHover(canvas, () => scene, (hoverId) => { if (!scene) return; const ctx = fitCanvas(canvas, widthNow(), scene.height); scene.draw(ctx, hoverId); });
             render();
             window.addEventListener("resize", render);
           }
 
-          if (!flows.length) renderWholePanelClassic();
+          if (!flows.length) renderWholePanelNetwork();
           else renderPerTopic();
         })();
         </script>
