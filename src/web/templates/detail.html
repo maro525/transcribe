@@ -3,65 +3,179 @@
 <head>
     <meta charset="UTF-8">
     <title>{{ job.filename }} — Transcribe Dashboard</title>
+    <!-- "Aetheric Precision" web fonts: Plus Jakarta Sans (headings) + Inter
+         (body/labels). Loaded so the design typography renders without relying
+         on locally-installed fonts. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Plus+Jakarta+Sans:wght@600;700&display=swap">
     <style>
-        :root { color-scheme: light dark; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-            max-width: 1000px;
-            margin: 2rem auto;
-            padding: 0 1rem;
-            line-height: 1.5;
+        /* "Aetheric Precision" design tokens — light primary, dark kept. */
+        :root {
+            color-scheme: light dark;
+            --bg: #FAFAFB;
+            --card: #FFFFFF;
+            --text: #18181B;
+            --muted: #71717A;
+            --faint: #A1A1AA;
+            --border: #EAEAEC;
+            --divider: #ECECEE;
+            --accent: #4F46E5;
+            --accent-soft: rgba(79, 70, 229, 0.08);
+            --ok-bg: #F0FDF4;
+            --ok-text: #166534;
+            --err-bg: #FEF2F2;
+            --err-text: #991B1B;
+            --track: #F4F4F5;
+            --radius: 12px;
+            --shadow-float: 0 4px 12px rgba(0, 0, 0, 0.03);
         }
-        h1 { font-size: 1.2rem; margin: 0.5rem 0 0.25rem; word-break: break-all; }
-        h2 { font-size: 0.8rem; color: #777; margin: 0 0 0.5rem; text-transform: uppercase; letter-spacing: 0.04em; }
-        .topbar { margin: 0; font-size: 0.9rem; }
-        a { color: #0366d6; text-decoration: none; cursor: pointer; }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #111113;
+                --card: #1A1A1D;
+                --text: #E7E7EA;
+                --muted: #9A9AA3;
+                --faint: #70707A;
+                --border: #26262B;
+                --divider: #222227;
+                --accent: #818CF8;
+                --accent-soft: rgba(129, 140, 248, 0.14);
+                --ok-bg: rgba(22, 101, 52, 0.28);
+                --ok-text: #86EFAC;
+                --err-bg: rgba(153, 27, 27, 0.25);
+                --err-text: #FCA5A5;
+                --track: #232328;
+                --shadow-float: 0 4px 12px rgba(0, 0, 0, 0.25);
+            }
+        }
+        /* Buildless: "Inter" / "Plus Jakarta Sans" lead the stacks but are
+           only used when locally installed — no external font request. */
+        body {
+            font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+                "Hiragino Sans", "Yu Gothic UI", system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            max-width: 1040px;
+            margin: 2.5rem auto 4rem;
+            padding: 0 1.25rem;
+            line-height: 1.7;
+        }
+        h1 {
+            font-family: "Plus Jakarta Sans", "Inter", -apple-system, BlinkMacSystemFont,
+                "Segoe UI", "Hiragino Sans", "Yu Gothic UI", system-ui, sans-serif;
+            font-size: 1.45rem;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+            line-height: 1.35;
+            margin: 1rem 0 0.6rem;
+            word-break: break-all;
+        }
+        h2 {
+            display: flex;
+            align-items: center;
+            gap: 0.45rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--muted);
+            margin: 0 0 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+        h2::before {
+            content: "";
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--accent);
+            opacity: 0.55;
+            flex: none;
+        }
+        .topbar { margin: 0; font-size: 0.8rem; }
+        .topbar a { color: var(--muted); }
+        .topbar a:hover { color: var(--accent); text-decoration: none; }
+        a { color: var(--accent); text-decoration: none; cursor: pointer; }
         a:hover { text-decoration: underline; }
-        .meta { color: #888; font-size: 0.85rem; margin: 0 0 1.5rem; }
+        .meta {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.5rem 1rem;
+            color: var(--muted);
+            font-size: 0.8rem;
+            margin: 0 0 2rem;
+        }
+        .chip { color: var(--muted); white-space: nowrap; }
         .state {
-            display: inline-block;
-            padding: 0.15rem 0.5rem;
-            border-radius: 3px;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.2rem 0.65rem;
+            border-radius: 999px;
             font-size: 0.72rem;
             font-weight: 600;
-            text-transform: uppercase;
+            letter-spacing: 0.02em;
         }
-        .state-done { background: #d4edda; color: #155724; }
+        .state::before {
+            content: "";
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+        .state-done { background: var(--ok-bg); color: var(--ok-text); }
+        .state-processing { background: var(--accent-soft); color: var(--accent); }
+        .state-queued { background: var(--track); color: var(--muted); }
+        .state-error { background: var(--err-bg); color: var(--err-text); }
         .panel {
-            border: 1px solid rgba(127,127,127,0.25);
-            border-radius: 6px;
-            padding: 0.8rem 1rem;
-            margin-bottom: 1rem;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 1.4rem 1.5rem;
+            margin-bottom: 1.25rem;
         }
-        .none { color: #aaa; font-size: 0.85rem; margin: 0.25rem 0; }
-        .keywords ul { list-style: none; margin: 0; padding: 0; column-width: 14rem; column-gap: 2rem; }
-        .keywords li {
-            display: flex;
-            justify-content: space-between;
-            padding: 0.15rem 0;
-            border-bottom: 1px dashed rgba(127,127,127,0.2);
-            break-inside: avoid;
-        }
-        .keywords .score { color: #999; font-size: 0.75rem; }
-        .kw-row { display: flex; gap: 1rem; align-items: flex-start; }
-        .kw-row .panel { margin-bottom: 1rem; }
+        .none { color: var(--faint); font-size: 0.85rem; margin: 0.25rem 0; }
+        .kw-row { display: flex; gap: 1.25rem; align-items: flex-start; }
+        .kw-row .panel { margin-bottom: 1.25rem; }
         .kw-network { flex: 2 1 0; min-width: 0; }
         .kw-side { flex: 1 1 0; min-width: 190px; }
         .kw-side ul { list-style: none; margin: 0; padding: 0; }
-        .kw-side li { display: flex; justify-content: space-between; gap: 0.5rem; padding: 0.15rem 0; border-bottom: 1px dashed rgba(127,127,127,0.2); font-size: 0.85rem; }
+        .kw-side li {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.4rem 0;
+            border-bottom: 1px solid var(--divider);
+            font-size: 0.85rem;
+        }
+        .kw-side li:last-child { border-bottom: 0; }
         .kw-side li span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .kw-side .score { color: #999; font-size: 0.75rem; flex: none; }
-        .kw-side h2 { margin-top: 0.9rem; }
+        .kw-side .score {
+            flex: none;
+            background: var(--accent-soft);
+            color: var(--accent);
+            border-radius: 999px;
+            padding: 0.05rem 0.55rem;
+            font-size: 0.72rem;
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+        }
+        .kw-side h2 { margin-top: 1.2rem; }
         .kw-side h2:first-child { margin-top: 0; }
-        @media (max-width: 640px) { .kw-row { flex-direction: column; } }
+        @media (max-width: 640px) {
+            .kw-row { flex-direction: column; align-items: stretch; }
+            body { margin: 1.25rem auto 2.5rem; }
+        }
         .graph-body { position: relative; margin-top: 0.5rem; }
         #graph-canvas { width: 100%; height: 380px; display: block; }
         .structure-body { position: relative; margin-top: 0.5rem; }
-        #topics-canvas { width: 100%; display: block; }
-        .structure-note { color: #999; font-size: 0.72rem; margin: 0.4rem 0 0; }
+        #topics-canvas { width: 100%; display: block; border-radius: 8px; overflow: hidden; }
+        .structure-note { color: var(--faint); font-size: 0.72rem; margin: 0.5rem 0 0; }
         .structure-legend {
             display: flex; flex-wrap: wrap; gap: 0.4rem 1.1rem;
-            font-size: 0.75rem; color: #888; margin: 0.4rem 0 0;
+            font-size: 0.75rem; color: var(--muted); margin: 0.5rem 0 0;
             list-style: none; padding: 0;
         }
         .structure-legend .swatch {
@@ -71,55 +185,87 @@
         }
         #structure-tooltip {
             position: fixed; display: none; max-width: 340px;
-            padding: 0.45rem 0.6rem; font-size: 0.75rem; line-height: 1.4;
-            background: rgba(30,30,30,0.94); color: #eee;
-            border-radius: 4px; pointer-events: none; z-index: 20;
+            padding: 0.5rem 0.65rem; font-size: 0.75rem; line-height: 1.5;
+            background: rgba(24,24,27,0.95); color: #F4F4F5;
+            border-radius: 8px; pointer-events: none; z-index: 20;
             white-space: pre-wrap; word-break: break-word;
+            box-shadow: var(--shadow-float);
         }
         /* Decision-flow multi-view switcher (NSKETCH-873) */
-        .df-section { margin: 0.2rem 0 1.1rem; }
+        .df-section { margin: 0.2rem 0 1.4rem; }
         .df-section:last-child { margin-bottom: 0; }
         .df-head {
             display: flex; flex-wrap: wrap; align-items: baseline;
-            gap: 0.4rem 0.6rem; margin: 0 0 0.35rem;
+            gap: 0.4rem 0.6rem; margin: 0 0 0.45rem;
         }
         .df-title { font-weight: 600; font-size: 0.9rem; }
-        .df-summary { color: #888; font-size: 0.78rem; flex: 1 1 12rem; min-width: 0; }
-        .df-switch { display: flex; flex-wrap: wrap; gap: 0.25rem; margin: 0.1rem 0 0.35rem; }
+        .df-summary { color: var(--muted); font-size: 0.78rem; flex: 1 1 12rem; min-width: 0; }
+        /* Segmented control: recessed track + white active pill. The JS only
+           toggles aria-pressed and style.display ("flex"/"none") — untouched. */
+        .df-switch {
+            display: flex; flex-wrap: wrap; gap: 2px;
+            width: max-content; max-width: 100%;
+            margin: 0.15rem 0 0.6rem; padding: 3px;
+            background: var(--track); border-radius: 999px;
+        }
         .df-switch button {
             font: inherit; font-size: 0.72rem; line-height: 1;
-            padding: 0.28rem 0.55rem; cursor: pointer;
-            color: inherit; background: rgba(127,127,127,0.10);
-            border: 1px solid rgba(127,127,127,0.28); border-radius: 999px;
+            padding: 0.34rem 0.7rem; cursor: pointer;
+            color: var(--muted); background: transparent;
+            border: 0; border-radius: 999px;
         }
-        .df-switch button:hover { background: rgba(127,127,127,0.20); }
+        .df-switch button:hover { color: var(--text); }
         .df-switch button[aria-pressed="true"] {
-            background: rgba(9,105,218,0.16); border-color: rgba(9,105,218,0.5);
+            background: var(--card); color: var(--accent);
             font-weight: 600;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.07), 0 0 0 1px var(--border);
         }
         .df-canvas-wrap { position: relative; }
         .df-canvas-wrap canvas { width: 100%; display: block; }
-        .df-note { color: #999; font-size: 0.74rem; margin: 0.35rem 0 0; }
-        .df-conf { font-size: 0.68rem; color: #999; }
+        .df-note { color: var(--faint); font-size: 0.74rem; margin: 0.35rem 0 0; }
+        .df-conf { font-size: 0.68rem; color: var(--faint); }
         pre.transcript {
             white-space: pre-wrap;
-            background: rgba(127,127,127,0.08);
-            padding: 0.8rem;
-            border-radius: 4px;
-            margin: 0.5rem 0 0;
+            background: var(--track);
+            padding: 1rem 1.1rem;
+            border-radius: 8px;
+            margin: 0.25rem 0 0;
             max-height: 480px;
             overflow: auto;
             font-size: 0.82rem;
+            line-height: 1.7;
             font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         }
+        /* Structured transcript rows (progressive enhancement over the pre) */
+        .transcript-list { margin: 0.25rem 0 0; max-height: 560px; overflow: auto; padding-right: 0.4rem; }
+        .tr-row { padding: 0.95rem 0; border-top: 1px solid var(--divider); }
+        .tr-row:first-child { border-top: 0; padding-top: 0.35rem; }
+        .tr-head { display: flex; align-items: center; gap: 0.55rem; margin: 0 0 0.25rem; }
+        .tr-avatar {
+            width: 26px; height: 26px; flex: none;
+            display: inline-flex; align-items: center; justify-content: center;
+            border-radius: 50%; background: var(--accent-soft); color: var(--accent);
+            font-size: 0.75rem; font-weight: 600;
+        }
+        .tr-speaker {
+            font-size: 0.75rem; font-weight: 600; letter-spacing: 0.05em;
+            text-transform: uppercase; color: var(--muted);
+            min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .tr-time {
+            margin-left: auto; flex: none;
+            font-size: 0.72rem; color: var(--faint); font-variant-numeric: tabular-nums;
+        }
+        .tr-text { margin: 0; font-size: 0.92rem; line-height: 1.75; overflow-wrap: anywhere; }
     </style>
 </head>
 <body>
     <p class="topbar"><a href="/">← ジョブ一覧へ戻る</a></p>
     <h1>{{ job.filename }}</h1>
     <p class="meta">
-        <span class="state state-{{ job.state }}">{{ job.state }}</span>
-        {% if job.finished_at %} 完了: {{ job.finished_at }}{% endif %}
+        <span class="state state-{{ job.state }}">{{ {"done": "完了", "processing": "処理中", "queued": "待機中", "error": "エラー"}.get(job.state, job.state) }}</span>
+        {% if job.finished_at %}<span class="chip">完了 {{ job.finished_at }}</span>{% endif %}
+        {% if job.segments_completed %}<span class="chip">セグメント {{ job.segments_completed }}</span>{% endif %}
     </p>
 
     {% if structure and structure.statements %}
@@ -1378,6 +1524,62 @@
         <h2>文字起こし</h2>
         {% if text %}
         <pre class="transcript">{{ text }}</pre>
+        <script>
+        // Display-only progressive enhancement (Aetheric restyle): transcript
+        // lines are "[start - end] SPEAKER: text" (formatter.py). When >=90% of
+        // lines parse, swap the <pre> for structured rows (speaker chip + muted
+        // timestamp); otherwise the styled <pre> stays. The `text` payload and
+        // the server contract are untouched.
+        (() => {
+            const pre = document.querySelector("pre.transcript");
+            if (!pre) return;
+            const lines = pre.textContent.split("\n").filter((l) => l.trim() !== "");
+            if (!lines.length) return;
+            const RE = /^\[([^\s\]]+) - ([^\s\]]+)\]\s+(.+?):\s?(.*)$/;
+            const rows = lines.map((l) => RE.exec(l));
+            if (rows.filter(Boolean).length / lines.length < 0.9) return;
+            const letters = new Map(); // speaker -> A/B/C... by first appearance
+            const letterOf = (sp) => {
+                if (!letters.has(sp)) letters.set(sp, String.fromCharCode(65 + (letters.size % 26)));
+                return letters.get(sp);
+            };
+            const list = document.createElement("div");
+            list.className = "transcript-list";
+            rows.forEach((m, i) => {
+                const row = document.createElement("div");
+                row.className = "tr-row";
+                if (m) {
+                    const head = document.createElement("div");
+                    head.className = "tr-head";
+                    const av = document.createElement("span");
+                    av.className = "tr-avatar";
+                    av.textContent = letterOf(m[3]);
+                    const sp = document.createElement("span");
+                    sp.className = "tr-speaker";
+                    sp.textContent = m[3];
+                    const tm = document.createElement("span");
+                    tm.className = "tr-time";
+                    tm.textContent = m[1].replace(/\.\d+$/, "");
+                    head.appendChild(av);
+                    head.appendChild(sp);
+                    head.appendChild(tm);
+                    const p = document.createElement("p");
+                    p.className = "tr-text";
+                    p.textContent = m[4];
+                    row.appendChild(head);
+                    row.appendChild(p);
+                } else {
+                    const p = document.createElement("p");
+                    p.className = "tr-text";
+                    p.textContent = lines[i];
+                    row.appendChild(p);
+                }
+                list.appendChild(row);
+            });
+            pre.after(list);
+            pre.hidden = true;
+        })();
+        </script>
         {% else %}
         <p class="none">なし</p>
         {% endif %}
