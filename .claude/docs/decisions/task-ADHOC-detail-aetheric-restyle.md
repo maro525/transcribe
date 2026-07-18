@@ -4,7 +4,7 @@
 - linear_id: none (explicitly no Linear ticket)
 - tier: S
 - created: 2026-07-18
-- status: in-progress
+- status: done
 
 ## Brief
 Restyle the outer UI shell of src/web/templates/detail.html to the "Aetheric Precision"
@@ -52,4 +52,5 @@ shadows, content width 1040px, body line-height 1.7.
 - No tests reference templates; no test impact.
 
 ## Deploy
-<!-- PR link filled after gh pr create -->
+- Branch: feature/detail-aetheric-restyle (commit 9f13724)
+- PR: https://github.com/maro525/transcribe/pull/15
