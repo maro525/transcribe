@@ -4,7 +4,7 @@
 - linear_id: none (explicitly no Linear ticket)
 - tier: S
 - created: 2026-07-18
-- status: implementing
+- status: done
 
 ## Brief
 Restyle src/web/templates/index.html to match detail.html's "Aetheric Precision"
@@ -56,4 +56,6 @@ centered muted with input/ code chip.
 - No tests reference the templates; no Python changes.
 
 ## Deploy
-<!-- PR info -->
+- PR: https://github.com/maro525/transcribe/pull/16 (feature/dashboard-aetheric-index -> main)
+- Commit: d374264 feat(web): restyle dashboard index to Aetheric Precision design system
+- No Linear ticket (explicitly requested).
