@@ -3,81 +3,194 @@
 <head>
     <meta charset="UTF-8">
     <title>Transcribe Dashboard</title>
+    <!-- "Aetheric Precision" web fonts: Plus Jakarta Sans (headings) + Inter
+         (body/labels). Same link as detail.html so both pages stay in sync. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Plus+Jakarta+Sans:wght@600;700&display=swap">
     <style>
-        :root { color-scheme: light dark; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-            max-width: 1000px;
-            margin: 2rem auto;
-            padding: 0 1rem;
-            line-height: 1.5;
+        /* "Aetheric Precision" design tokens — identical to detail.html. */
+        :root {
+            color-scheme: light dark;
+            --bg: #FAFAFB;
+            --card: #FFFFFF;
+            --text: #18181B;
+            --muted: #71717A;
+            --faint: #A1A1AA;
+            --border: #EAEAEC;
+            --divider: #ECECEE;
+            --accent: #4F46E5;
+            --accent-soft: rgba(79, 70, 229, 0.08);
+            --ok-bg: #F0FDF4;
+            --ok-text: #166534;
+            --err-bg: #FEF2F2;
+            --err-text: #991B1B;
+            --track: #F4F4F5;
+            --radius: 12px;
+            --shadow-float: 0 4px 12px rgba(0, 0, 0, 0.03);
         }
-        h1 { font-size: 1.4rem; margin: 0 0 0.25rem; }
-        .subtitle { color: #888; font-size: 0.85rem; margin: 0.25rem 0 1.5rem; }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #111113;
+                --card: #1A1A1D;
+                --text: #E7E7EA;
+                --muted: #9A9AA3;
+                --faint: #70707A;
+                --border: #26262B;
+                --divider: #222227;
+                --accent: #818CF8;
+                --accent-soft: rgba(129, 140, 248, 0.14);
+                --ok-bg: rgba(22, 101, 52, 0.28);
+                --ok-text: #86EFAC;
+                --err-bg: rgba(153, 27, 27, 0.25);
+                --err-text: #FCA5A5;
+                --track: #232328;
+                --shadow-float: 0 4px 12px rgba(0, 0, 0, 0.25);
+            }
+        }
+        body {
+            font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+                "Hiragino Sans", "Yu Gothic UI", system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            max-width: 1040px;
+            margin: 2.5rem auto 4rem;
+            padding: 0 1.25rem;
+            line-height: 1.7;
+        }
+        h1 {
+            font-family: "Plus Jakarta Sans", "Inter", -apple-system, BlinkMacSystemFont,
+                "Segoe UI", "Hiragino Sans", "Yu Gothic UI", system-ui, sans-serif;
+            font-size: 1.5rem;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+            line-height: 1.35;
+            margin: 0 0 0.35rem;
+        }
+        .subtitle {
+            color: var(--muted);
+            font-size: 0.85rem;
+            margin: 0 0 1.5rem;
+        }
+        .subtitle a { white-space: nowrap; }
+        a { color: var(--accent); text-decoration: none; cursor: pointer; }
+        a:hover { text-decoration: underline; }
+        code {
+            background: var(--track);
+            border: 1px solid var(--border);
+            color: var(--muted);
+            padding: 0.05rem 0.4rem;
+            border-radius: 6px;
+            font-size: 0.82em;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
         .status-bar {
             font-size: 0.8rem;
-            color: #666;
-            background: rgba(127,127,127,0.08);
-            padding: 0.4rem 0.7rem;
-            border-radius: 4px;
-            margin-bottom: 1rem;
+            color: var(--muted);
+            background: var(--track);
+            padding: 0.55rem 0.9rem;
+            border-radius: 10px;
+            margin-bottom: 1.1rem;
             display: flex;
             gap: 0.75rem;
             justify-content: space-between;
             align-items: center;
         }
-        .connection-status { color: #888; white-space: nowrap; }
-        table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+        .connection-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            color: var(--faint);
+            font-size: 0.75rem;
+            white-space: nowrap;
+        }
+        .connection-status.is-live { color: var(--muted); }
+        .connection-status.is-live::before {
+            content: "";
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #22C55E;
+            flex: none;
+        }
+        /* Card shell around whatever fills it: the JS-rendered table, the
+           server-rendered fallback (_jobs.html), or the empty state. */
+        #jobs-root {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow-float);
+            overflow-x: auto;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.88rem;
+        }
         th, td {
-            padding: 0.55rem 0.6rem;
+            padding: 0.85rem 1rem;
             text-align: left;
-            border-bottom: 1px solid rgba(127,127,127,0.2);
+            border-bottom: 1px solid var(--border);
             vertical-align: top;
         }
+        tbody tr:last-child th,
+        tbody tr:last-child td { border-bottom: 0; }
+        tbody tr:hover { background: var(--bg); }
         th {
             font-weight: 600;
-            font-size: 0.75rem;
-            color: #777;
+            font-size: 0.7rem;
+            color: var(--muted);
             text-transform: uppercase;
-            letter-spacing: 0.04em;
+            letter-spacing: 0.08em;
+            white-space: nowrap;
         }
+        td.file { font-weight: 500; word-break: break-all; }
+        td.num { font-variant-numeric: tabular-nums; }
         .state {
-            display: inline-block;
-            padding: 0.15rem 0.5rem;
-            border-radius: 3px;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.2rem 0.65rem;
+            border-radius: 999px;
             font-size: 0.72rem;
             font-weight: 600;
-            text-transform: uppercase;
+            letter-spacing: 0.02em;
+            white-space: nowrap;
         }
-        .state-queued { background: #e5e5e5; color: #555; }
-        .state-processing { background: #fff3cd; color: #856404; }
-        .state-done { background: #d4edda; color: #155724; }
-        .state-error { background: #f8d7da; color: #721c24; }
-        .current { color: #777; font-size: 0.8rem; max-width: 360px; }
-        a { color: #0366d6; text-decoration: none; cursor: pointer; }
-        a:hover { text-decoration: underline; }
-        .empty { color: #999; text-align: center; padding: 3rem 1rem; }
-        pre.transcript {
-            white-space: pre-wrap;
-            background: rgba(127,127,127,0.08);
-            padding: 0.8rem;
-            border-radius: 4px;
-            margin: 1rem 0 0;
-            max-height: 360px;
-            overflow: auto;
-            font-size: 0.82rem;
-            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        .state::before {
+            content: "";
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: currentColor;
         }
-        .viewer-title {
-            font-size: 0.85rem;
-            color: #888;
-            margin: 1.5rem 0 0;
+        .state-done { background: var(--ok-bg); color: var(--ok-text); }
+        .state-processing { background: var(--accent-soft); color: var(--accent); }
+        .state-queued { background: var(--track); color: var(--muted); }
+        .state-error { background: var(--err-bg); color: var(--err-text); }
+        .current {
+            color: var(--muted);
+            font-size: 0.8rem;
+            max-width: 360px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
-        code {
-            background: rgba(127,127,127,0.12);
-            padding: 0.05rem 0.35rem;
-            border-radius: 3px;
-            font-size: 0.85em;
+        td a { white-space: nowrap; }
+        .cell-error { color: var(--err-text); font-size: 0.78rem; }
+        .empty {
+            color: var(--muted);
+            text-align: center;
+            padding: 3.5rem 1rem;
+            font-size: 0.9rem;
+        }
+        @media (max-width: 640px) {
+            body { margin: 1.25rem auto 2.5rem; }
+            /* Keep sane column widths and let the card scroll horizontally. */
+            table { min-width: 560px; }
+            .current { max-width: 180px; }
+            th, td { padding: 0.7rem 0.75rem; }
         }
     </style>
 </head>
@@ -104,9 +217,11 @@
             let pollingTimer = null;
 
             const stateOrder = { processing: 0, queued: 1, error: 2, done: 3 };
+            const stateLabels = { queued: "待機中", processing: "処理中", done: "完了", error: "エラー" };
 
             function setConnectionStatus(text) {
                 connectionStatus.textContent = text;
+                connectionStatus.classList.toggle("is-live", text === "live");
             }
 
             function sortedJobs() {
@@ -153,28 +268,27 @@
                 const tbody = document.createElement("tbody");
                 currentJobs.forEach((job) => {
                     const row = document.createElement("tr");
-                    appendCell(row, job.filename);
+                    appendCell(row, job.filename, "file");
 
                     const stateCell = document.createElement("td");
                     const state = document.createElement("span");
                     state.className = `state state-${job.state}`;
-                    state.textContent = job.state;
+                    state.textContent = stateLabels[job.state] || job.state;
                     stateCell.appendChild(state);
                     row.appendChild(stateCell);
 
-                    appendCell(row, String(job.segments_completed ?? 0));
+                    appendCell(row, String(job.segments_completed ?? 0), "num");
                     appendCell(row, job.current_text || "", "current");
 
                     const actionCell = document.createElement("td");
                     if (job.state === "done" && job.output_path) {
                         const link = document.createElement("a");
-                        link.textContent = "詳細";
+                        link.textContent = "詳細 →";
                         link.href = `/jobs/${encodeURIComponent(job.filename)}`;
                         actionCell.appendChild(link);
                     } else if (job.state === "error") {
                         const error = document.createElement("span");
-                        error.style.color = "#a33";
-                        error.style.fontSize = "0.8rem";
+                        error.className = "cell-error";
                         error.textContent = job.error || "";
                         actionCell.appendChild(error);
                     }

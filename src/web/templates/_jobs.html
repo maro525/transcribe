@@ -15,15 +15,15 @@
     <tbody>
         {% for job in jobs %}
         <tr>
-            <td>{{ job.filename }}</td>
-            <td><span class="state state-{{ job.state }}">{{ job.state }}</span></td>
-            <td>{{ job.segments_completed }}</td>
+            <td class="file">{{ job.filename }}</td>
+            <td><span class="state state-{{ job.state }}">{{ {"done": "完了", "processing": "処理中", "queued": "待機中", "error": "エラー"}.get(job.state, job.state) }}</span></td>
+            <td class="num">{{ job.segments_completed }}</td>
             <td class="current">{{ job.current_text or '' }}</td>
             <td>
                 {% if job.state == 'done' and job.output_path %}
-                    <a href="/jobs/{{ job.filename|urlencode|replace('/', '%2F') }}">詳細</a>
+                    <a href="/jobs/{{ job.filename|urlencode|replace('/', '%2F') }}">詳細 →</a>
                 {% elif job.state == 'error' %}
-                    <span style="color:#a33; font-size:0.8rem">{{ job.error }}</span>
+                    <span class="cell-error">{{ job.error }}</span>
                 {% endif %}
             </td>
         </tr>
