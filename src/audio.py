@@ -1,6 +1,8 @@
 import subprocess
 from pathlib import Path
 
+from .ffmpeg_patch import creation_flags, resolve_ffmpeg
+
 
 def ensure_wav(
     file_path: str | Path,
@@ -20,7 +22,7 @@ def ensure_wav(
 
     subprocess.run(
         [
-            "ffmpeg", "-y",
+            resolve_ffmpeg(), "-y",
             "-i", str(file_path),
             "-ar", str(sample_rate),
             "-ac", "1",
@@ -29,5 +31,7 @@ def ensure_wav(
         check=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        # No console window flash on Windows (0 elsewhere — harmless).
+        creationflags=creation_flags(),
     )
     return wav_path, True

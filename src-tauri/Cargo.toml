@@ -1,0 +1,71 @@
+# Transcribe desktop shell (Tauri v2) — Windows x64 target.
+#
+# NOTE (未検証): authored on WSL2 Linux without a Windows toolchain.
+# Nothing here has been compiled. Crate versions are "latest known compatible"
+# picks and may need bumping on the first real Windows build.
+#
+# IMPORTANT version coupling: `windows` and `webview2-com` MUST match the
+# versions that the resolved `wry` (transitive dep of `tauri`) uses, otherwise
+# the COM interface types in src/webview.rs will not line up. After the first
+# `cargo update` on Windows, run `cargo tree -p wry` and align the two versions
+# below with wry's own `windows` / `webview2-com` dependency versions.
+
+[package]
+name = "transcribe-desktop"
+version = "0.1.0"
+description = "Transcribe — local transcription desktop app (Tauri shell)"
+authors = ["nsketch"]
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+# Used only to open external links in the default browser (no shell exec).
+tauri-plugin-opener = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "fs", "io-util"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# WS client for the native system-audio PCM feeder (second client on /live/ws).
+tokio-tungstenite = "0.26"
+
+# Runtime archive download (GitHub Releases). rustls to avoid schannel quirks.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
+sha2 = "0.10"
+zip = { version = "2", default-features = false, features = ["deflate", "deflate64"] }
+
+# HF token storage in Windows Credential Manager.
+keyring = { version = "3", features = ["windows-native"] }
+
+# WASAPI loopback capture (input stream opened on an output device).
+cpal = "0.15"
+
+rand = "0.8"
+url = "2"
+
+[target.'cfg(windows)'.dependencies]
+# Feature list covers: CreateProcessW/Job Objects/pipes (process.rs),
+# GetDiskFreeSpaceExW (main.rs), EventRegistrationToken (webview.rs).
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_Storage_FileSystem",
+    "Win32_System_WinRT",
+] }
+# WebView2 COM interop for the PermissionRequested handler (webview.rs).
+webview2-com = "0.37"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

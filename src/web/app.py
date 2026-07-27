@@ -1,5 +1,8 @@
 import asyncio
+import hmac
 import json
+import os
+import threading
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from pathlib import Path
@@ -15,20 +18,29 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import config
+from .. import config, worker_state
 from ..artifacts import load_graph, load_keywords, load_structure
+from ..live import moonshine_fetch
 from ..live.session import LiveSessionError, manager as live_manager
 from ..status import StoreEvent, store
+from ..version import BACKEND_VERSION, PROTOCOL_VERSION
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+STATIC_DIR = Path(__file__).parent / "static"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 LifespanFactory = Callable[[FastAPI], AbstractAsyncContextManager]
 HEARTBEAT_SECONDS = 15
 SSE_RETRY_MS = 2000
 LIVE_WS_OUTBOUND_MAXSIZE = 1000
+
+# Desktop (Tauri) shell sends this header on POST /internal/shutdown; the
+# expected value arrives via the TRANSCRIBE_SHUTDOWN_SECRET env var.
+SHUTDOWN_TOKEN_HEADER = "x-shutdown-token"
+SHUTDOWN_SECRET_ENV_VAR = "TRANSCRIBE_SHUTDOWN_SECRET"
 
 
 def _origin_allowed(websocket: WebSocket) -> bool:
@@ -92,8 +104,82 @@ async def event_stream(request: Request) -> AsyncIterator[str]:
         store.unsubscribe(subscriber)
 
 
+def _graceful_shutdown(app: FastAPI) -> None:
+    """Finalize a recording live session, then ask uvicorn to exit.
+
+    Runs on a daemon thread so POST /internal/shutdown can return 202
+    immediately (a live finalize can take up to a minute). The uvicorn
+    server instance is stored on ``app.state`` by main.py in dynamic-port
+    (Tauri) mode; when absent (plain dev run) only the finalize happens.
+    """
+    try:
+        if live_manager.status()["state"] == "recording":
+            live_manager.stop()
+    except Exception as error:
+        print(f"Shutdown: live session finalize failed: {error}")
+    server = getattr(app.state, "uvicorn_server", None)
+    if server is not None:
+        server.should_exit = True
+
+
 def create_app(lifespan: LifespanFactory | None = None) -> FastAPI:
     app = FastAPI(title="Transcribe Dashboard", lifespan=lifespan)
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    # Read at app-creation time (not import time) so tests and the desktop
+    # shell can control it; None disables the shutdown endpoint entirely.
+    app.state.shutdown_secret = os.environ.get(SHUTDOWN_SECRET_ENV_VAR) or None
+    app.state.uvicorn_server = None
+
+    @app.get("/healthz")
+    def healthz():
+        return JSONResponse(
+            {
+                "status": "ok",
+                "protocol": PROTOCOL_VERSION,
+                "backend_version": BACKEND_VERSION,
+                "worker": worker_state.get_state(),
+            }
+        )
+
+    @app.post("/internal/shutdown", status_code=202)
+    def internal_shutdown(request: Request):
+        secret = getattr(request.app.state, "shutdown_secret", None)
+        if not secret:
+            raise HTTPException(status_code=404)
+        token = request.headers.get(SHUTDOWN_TOKEN_HEADER, "")
+        if not hmac.compare_digest(token.encode(), secret.encode()):
+            raise HTTPException(status_code=403)
+        threading.Thread(
+            target=_graceful_shutdown, args=(request.app,), daemon=True
+        ).start()
+        return {"status": "shutting down"}
+
+    @app.get("/internal/models/moonshine")
+    def moonshine_status():
+        return JSONResponse(moonshine_fetch.download_status())
+
+    @app.post("/internal/models/moonshine", status_code=202)
+    async def moonshine_download(request: Request):
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = None
+        accepted = isinstance(payload, dict) and payload.get("accept_license") is True
+        if not accepted:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Moonshine weights are under the Moonshine AI Community "
+                    f"License ({moonshine_fetch.LICENSE_URL}). POST "
+                    '{"accept_license": true} to consent and start the download.'
+                ),
+            )
+        moonshine_fetch.record_license_acceptance()
+        started = moonshine_fetch.start_background_download()
+        return JSONResponse(
+            {**moonshine_fetch.download_status(), "started": started},
+            status_code=202,
+        )
 
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request):

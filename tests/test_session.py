@@ -281,6 +281,119 @@ def test_keywords_message_shape_is_preserved():
                 assert isinstance(item["score"], (int, float))
 
 
+def test_recording_uses_part_suffix_until_finalize():
+    """Tauri-desktop A4: in-progress recordings are live_<id>.wav.part and
+    only graceful finalize produces (and hands over) a bare .wav."""
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        manager = _manager(base)
+        manager.start()
+        parts = list((base / "tmp").glob("live_*.wav.part"))
+        assert len(parts) == 1
+        assert not list((base / "tmp").glob("live_*.wav"))
+        manager.feed_pcm(_pcm_bytes(0.5, 2.0))
+        manager.stop()
+        # no leftovers in tmp; final WAV moved to input/ without .part
+        assert not list((base / "tmp").iterdir())
+        assert list((base / "input").glob("meeting_*.wav"))
+
+
+def test_start_failure_removes_part_file():
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+
+        class BrokenEngineWorker:
+            def __init__(self):
+                raise RuntimeError("engine down")
+
+        manager = LiveSessionManager(
+            source_dir=base / "input",
+            output_dir=base / "output",
+            temp_dir=base / "tmp",
+            engine_provider=FakeEngine,
+            vad_factory=FakeVad,
+        )
+        # Break worker construction via a segmenter/vad that fails after the
+        # WAV was opened: use a vad factory whose probability access explodes.
+        import src.live.session as session_module
+
+        saved = session_module.TranscriptionWorker
+        session_module.TranscriptionWorker = BrokenEngineWorker
+        try:
+            try:
+                manager.start()
+                raise AssertionError("start must fail")
+            except LiveSessionError:
+                pass
+        finally:
+            session_module.TranscriptionWorker = saved
+        assert not list((base / "tmp").glob("*.part"))
+
+
+def _captured_tauri_lines(stdout_text):
+    return [
+        line for line in stdout_text.splitlines() if line.startswith("TAURI_EVENT ")
+    ]
+
+
+def test_system_source_emits_tauri_capture_events():
+    import io
+    import json as json_module
+    from contextlib import redirect_stdout
+
+    with tempfile.TemporaryDirectory() as tmp:
+        manager = _manager(Path(tmp))
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            manager.start(source="system")
+            session_id = manager.status()["session_id"]
+            manager.feed_pcm(_pcm_bytes(0.5, 1.5))
+            manager.stop()
+
+        lines = _captured_tauri_lines(buffer.getvalue())
+        assert len(lines) == 2
+        start_payload = json_module.loads(lines[0][len("TAURI_EVENT "):])
+        stop_payload = json_module.loads(lines[1][len("TAURI_EVENT "):])
+        assert start_payload == {"capture": "start", "session_id": session_id}
+        assert stop_payload == {"capture": "stop", "session_id": session_id}
+
+
+def test_mic_source_emits_no_tauri_events():
+    import io
+    from contextlib import redirect_stdout
+
+    with tempfile.TemporaryDirectory() as tmp:
+        manager = _manager(Path(tmp))
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            manager.start(source="mic")
+            manager.feed_pcm(_pcm_bytes(0.5, 1.5))
+            manager.stop()
+        assert _captured_tauri_lines(buffer.getvalue()) == []
+
+
+def test_auto_finalize_emits_tauri_stop_for_system_source():
+    import io
+    import time
+    from contextlib import redirect_stdout
+
+    with tempfile.TemporaryDirectory() as tmp:
+        manager = _manager(Path(tmp))
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            manager.client_connected()
+            manager.start(source="system")
+            manager.feed_pcm(_pcm_bytes(0.5, 1.0))
+            manager.client_disconnected()
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                if manager.status()["state"] == "idle":
+                    break
+                time.sleep(0.05)
+        lines = _captured_tauri_lines(buffer.getvalue())
+        assert any('"capture": "stop"' in line for line in lines)
+
+
 def test_pause_flag_follows_session_lifecycle():
     with tempfile.TemporaryDirectory() as tmp:
         manager = _manager(Path(tmp))

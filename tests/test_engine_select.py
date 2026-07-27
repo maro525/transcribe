@@ -85,8 +85,10 @@ def test_auto_without_any_weights_raises():
     raise AssertionError("expected LiveEngineError")
 
 
-def test_empty_choice_defaults_to_moonshine():
-    assert _create("") is MOONSHINE_SENTINEL
+def test_empty_choice_defaults_to_whispercpp():
+    # Desktop default (NSKETCH tauri-desktop): whispercpp + MIT ggml weights.
+    # Moonshine stays selectable but is opt-in (license-gated download).
+    assert _create("") is WHISPER_SENTINEL
 
 
 def test_invalid_choice_raises():
@@ -99,14 +101,14 @@ def test_invalid_choice_raises():
 
 
 def test_get_engine_is_singleton():
-    # Default LIVE_ENGINE is moonshine (CPU-first).
+    # Default LIVE_ENGINE is whispercpp.
     with _patched():
         saved = engine_module._engine
         engine_module._engine = None
         try:
             first = engine_module.get_engine()
             second = engine_module.get_engine()
-            assert first is MOONSHINE_SENTINEL
+            assert first is WHISPER_SENTINEL
             assert first is second
         finally:
             engine_module._engine = saved

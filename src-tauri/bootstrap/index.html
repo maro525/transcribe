@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transcribe セットアップ</title>
+<style>
+  /* Bootstrap/setup page only. The real app UI is served by the Python
+     backend at http://127.0.0.1:<port>/ after setup completes.
+     No external assets (CSP: 'self' only). */
+  :root {
+    --bg: #101418;
+    --panel: #1a2027;
+    --panel2: #212933;
+    --text: #e8edf2;
+    --muted: #93a1b0;
+    --accent: #28a0a0;
+    --accent2: #35c4c4;
+    --warn: #d9a03c;
+    --err: #d96a5a;
+    --ok: #57b87a;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Yu Gothic UI", "Meiryo", "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    padding: 32px 24px 48px;
+    max-width: 720px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 20px; font-weight: 600; letter-spacing: .04em; margin-bottom: 4px; }
+  .sub { color: var(--muted); font-size: 12px; margin-bottom: 24px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid #2a333e;
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    margin-bottom: 16px;
+  }
+  .card h2 { font-size: 14px; font-weight: 600; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+  .step-num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; border-radius: 50%;
+    background: var(--panel2); color: var(--accent2);
+    font-size: 12px; font-weight: 700; flex: none;
+  }
+  .muted { color: var(--muted); font-size: 12px; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+  button {
+    background: var(--accent); color: #fff; border: none;
+    border-radius: 6px; padding: 8px 18px; font-size: 13px;
+    cursor: pointer; font-family: inherit;
+  }
+  button:hover { background: var(--accent2); }
+  button:disabled { background: #3a4550; color: #7c8894; cursor: default; }
+  button.ghost { background: transparent; border: 1px solid #3a4550; color: var(--text); }
+  button.ghost:hover { border-color: var(--accent2); color: var(--accent2); }
+  input[type="password"], input[type="text"] {
+    background: var(--panel2); border: 1px solid #3a4550; color: var(--text);
+    border-radius: 6px; padding: 8px 10px; font-size: 13px; flex: 1; min-width: 220px;
+    font-family: inherit;
+  }
+  input:focus { outline: 1px solid var(--accent); }
+  .bar-outer {
+    background: var(--panel2); border-radius: 6px; height: 10px;
+    overflow: hidden; margin-top: 12px;
+  }
+  .bar-inner {
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    height: 100%; width: 0%; transition: width .2s linear;
+  }
+  .stat { display: flex; justify-content: space-between; margin-top: 6px; font-size: 12px; color: var(--muted); }
+  .badge { font-size: 11px; border-radius: 4px; padding: 2px 8px; background: var(--panel2); color: var(--muted); }
+  .badge.ok { color: var(--ok); }
+  .badge.warn { color: var(--warn); }
+  .badge.err { color: var(--err); }
+  .error-box {
+    display: none; margin-top: 12px; padding: 10px 12px;
+    border: 1px solid var(--err); border-radius: 6px;
+    color: var(--err); font-size: 12px; white-space: pre-wrap; word-break: break-all;
+  }
+  .error-box.show { display: block; }
+  a.link { color: var(--accent2); cursor: pointer; text-decoration: underline; font-size: 12px; }
+  ul.gates { margin: 8px 0 0 18px; font-size: 12px; color: var(--muted); }
+  ul.gates li { margin-bottom: 4px; }
+  #status-line { margin-top: 20px; font-size: 12px; color: var(--muted); min-height: 18px; }
+  .spinner {
+    display: inline-block; width: 12px; height: 12px; border-radius: 50%;
+    border: 2px solid #3a4550; border-top-color: var(--accent2);
+    animation: spin 0.9s linear infinite; vertical-align: -2px; margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+  <h1>Transcribe</h1>
+  <div class="sub">初回セットアップ — 音声書き起こし環境を準備します</div>
+
+  <!-- Step 1: disk + runtime download -->
+  <div class="card" id="card-runtime">
+    <h2><span class="step-num">1</span>バックエンド環境のダウンロード
+      <span class="badge" id="runtime-badge">確認中…</span></h2>
+    <div class="muted">
+      音声認識エンジン (Python ランタイム) をダウンロードします。ダウンロードは中断しても再開できます。
+    </div>
+    <div class="stat">
+      <span>必要サイズ: <span id="dl-total">-</span>（展開後はさらに数 GB 必要）</span>
+      <span>空きディスク容量: <span id="disk-free">-</span></span>
+    </div>
+    <div id="disk-warn" class="muted hidden" style="color: var(--warn); margin-top:6px;">
+      ⚠ 空き容量が不足している可能性があります。他のドライブの空き容量は使用できません。
+    </div>
+    <div class="bar-outer"><div class="bar-inner" id="dl-bar"></div></div>
+    <div class="stat">
+      <span id="dl-phase">待機中</span>
+      <span><span id="dl-done">0</span> / <span id="dl-total2">-</span>（<span id="dl-speed">-</span>）</span>
+    </div>
+    <div class="row">
+      <button id="btn-download">ダウンロード開始</button>
+      <button id="btn-retry-download" class="ghost hidden">再試行</button>
+    </div>
+    <div class="error-box" id="err-download"></div>
+  </div>
+
+  <!-- Step 2: HF token (optional, for speaker diarization) -->
+  <div class="card" id="card-token">
+    <h2><span class="step-num">2</span>Hugging Face トークン（任意）
+      <span class="badge" id="token-badge">未設定</span></h2>
+    <div class="muted">
+      話者分離 (pyannote) を使う場合のみ必要です。トークンは Windows 資格情報マネージャーに保存され、
+      バックエンド起動時にのみ渡されます。あとから設定することもできます。
+    </div>
+    <ul class="gates">
+      <li>以下 2 つのモデルページで「Agree」してアクセス権を取得してください:</li>
+      <li><a class="link" data-url="https://huggingface.co/pyannote/segmentation-3.0">pyannote/segmentation-3.0 の利用規約ページを開く</a></li>
+      <li><a class="link" data-url="https://huggingface.co/pyannote/speaker-diarization-3.1">pyannote/speaker-diarization-3.1 の利用規約ページを開く</a></li>
+      <li><a class="link" data-url="https://huggingface.co/settings/tokens">トークンの発行ページを開く</a></li>
+    </ul>
+    <div class="row">
+      <input type="password" id="hf-token" placeholder="hf_...">
+      <button id="btn-save-token">保存</button>
+      <button id="btn-delete-token" class="ghost hidden">削除</button>
+    </div>
+    <div class="error-box" id="err-token"></div>
+  </div>
+
+  <!-- Step 3: launch -->
+  <div class="card" id="card-launch">
+    <h2><span class="step-num">3</span>アプリを起動
+      <span class="badge" id="backend-badge">待機中</span></h2>
+    <div class="muted">
+      バックエンドを起動してアプリ画面へ切り替えます。初回はモデルのダウンロードが画面内で始まります。
+    </div>
+    <div class="row">
+      <button id="btn-start" disabled>起動</button>
+      <button id="btn-retry-start" class="ghost hidden">再試行</button>
+    </div>
+    <div class="error-box" id="err-start"></div>
+  </div>
+
+  <div id="status-line"></div>
+
+<script>
+/* Bootstrap page logic. Talks to Rust via Tauri IPC (withGlobalTauri).
+   This page is replaced entirely by the backend UI after start_backend
+   succeeds (Rust navigates the window to http://127.0.0.1:<port>/). */
+"use strict";
+const invoke = window.__TAURI__.core.invoke;
+const listen = window.__TAURI__.event.listen;
+
+const $ = (id) => document.getElementById(id);
+
+function fmtBytes(n) {
+  if (n == null || isNaN(n)) return "-";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0, v = Number(n);
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return v.toFixed(v >= 100 || i === 0 ? 0 : 1) + " " + units[i];
+}
+
+function showErr(id, msg) { const el = $(id); el.textContent = String(msg); el.classList.add("show"); }
+function clearErr(id) { const el = $(id); el.textContent = ""; el.classList.remove("show"); }
+function badge(id, text, cls) {
+  const el = $(id);
+  el.textContent = text;
+  el.className = "badge" + (cls ? " " + cls : "");
+}
+function status(msg, spin) {
+  $("status-line").innerHTML = (spin ? '<span class="spinner"></span>' : "") + msg;
+}
+
+let setup = null;          // last get_setup_status result
+let downloading = false;
+let starting = false;
+
+async function refresh() {
+  try {
+    setup = await invoke("get_setup_status");
+  } catch (e) {
+    status("状態の取得に失敗しました: " + e, false);
+    return;
+  }
+  $("dl-total").textContent = fmtBytes(setup.manifest_size);
+  $("dl-total2").textContent = fmtBytes(setup.manifest_size);
+  $("disk-free").textContent = fmtBytes(setup.disk_free);
+  // Rough guard: archive + extracted tree. Extraction factor is an estimate.
+  const required = setup.manifest_size ? setup.manifest_size * 3 : 0;
+  $("disk-warn").classList.toggle("hidden", !(required && setup.disk_free && setup.disk_free < required));
+
+  if (setup.runtime_installed) {
+    badge("runtime-badge", "インストール済み (" + (setup.runtime_version || "?") + ")", "ok");
+    $("btn-download").disabled = true;
+    $("btn-download").textContent = "ダウンロード済み";
+    $("btn-start").disabled = false;
+  } else {
+    badge("runtime-badge", "未インストール", "warn");
+    $("btn-download").disabled = downloading;
+    $("btn-start").disabled = true;
+  }
+
+  if (setup.has_hf_token) {
+    badge("token-badge", "保存済み", "ok");
+    $("btn-delete-token").classList.remove("hidden");
+    $("hf-token").placeholder = "（保存済み — 変更する場合のみ入力）";
+  } else {
+    badge("token-badge", "未設定", "");
+    $("btn-delete-token").classList.add("hidden");
+  }
+}
+
+/* ---- Step 1: runtime download ---- */
+
+async function startDownload() {
+  if (downloading) return;
+  downloading = true;
+  clearErr("err-download");
+  $("btn-download").disabled = true;
+  $("btn-retry-download").classList.add("hidden");
+  badge("runtime-badge", "ダウンロード中…", "warn");
+  status("バックエンド環境をダウンロードしています…", true);
+  try {
+    await invoke("start_runtime_download");
+    badge("runtime-badge", "インストール完了", "ok");
+    status("ダウンロード完了。アプリを起動します…", true);
+    await refresh();
+    await startBackend();          // auto-chain: download -> launch
+  } catch (e) {
+    badge("runtime-badge", "失敗", "err");
+    showErr("err-download", e);
+    $("btn-retry-download").classList.remove("hidden");
+    status("ダウンロードに失敗しました。再試行できます（続きから再開されます）。", false);
+  } finally {
+    downloading = false;
+    $("btn-download").disabled = !!(setup && setup.runtime_installed);
+  }
+}
+
+listen("runtime-download-progress", (ev) => {
+  const p = ev.payload || {};
+  const phases = {
+    "resume-check": "既存ダウンロードを検証中…",
+    "download": "ダウンロード中",
+    "verify": "チェックサム検証中…",
+    "extract": "展開中…",
+    "install": "配置中…",
+    "done": "完了",
+  };
+  $("dl-phase").textContent = phases[p.phase] || p.phase || "";
+  if (p.total > 0) {
+    $("dl-bar").style.width = Math.min(100, (p.downloaded / p.total) * 100).toFixed(1) + "%";
+  }
+  $("dl-done").textContent = fmtBytes(p.downloaded);
+  if (p.total > 0) $("dl-total2").textContent = fmtBytes(p.total);
+  $("dl-speed").textContent = p.bytes_per_sec ? fmtBytes(p.bytes_per_sec) + "/s" : "-";
+});
+
+/* ---- Step 2: HF token ---- */
+
+async function saveToken() {
+  clearErr("err-token");
+  const token = $("hf-token").value.trim();
+  if (!token) { showErr("err-token", "トークンを入力してください。"); return; }
+  try {
+    await invoke("save_hf_token", { token });
+    $("hf-token").value = "";
+    await refresh();
+  } catch (e) {
+    showErr("err-token", e);
+  }
+}
+
+async function deleteToken() {
+  clearErr("err-token");
+  try {
+    await invoke("delete_hf_token");
+    await refresh();
+  } catch (e) {
+    showErr("err-token", e);
+  }
+}
+
+/* ---- Step 3: launch backend ---- */
+
+async function startBackend() {
+  if (starting) return;
+  starting = true;
+  clearErr("err-start");
+  $("btn-start").disabled = true;
+  $("btn-retry-start").classList.add("hidden");
+  badge("backend-badge", "起動中…", "warn");
+  status("バックエンドを起動しています…", true);
+  try {
+    await invoke("start_backend");
+    // On success Rust navigates this window away; nothing more to do here.
+    badge("backend-badge", "起動済み", "ok");
+  } catch (e) {
+    badge("backend-badge", "失敗", "err");
+    showErr("err-start", e);
+    $("btn-retry-start").classList.remove("hidden");
+    $("btn-start").disabled = false;
+    status("起動に失敗しました。ログ: %LOCALAPPDATA%\\Transcribe\\logs", false);
+  } finally {
+    starting = false;
+  }
+}
+
+listen("backend-status", (ev) => {
+  const p = ev.payload || {};
+  const stages = {
+    "spawning": "バックエンドプロセスを起動中…",
+    "waiting-ready": "ポート割り当てを待機中…",
+    "waiting-health": "ヘルスチェック中…",
+    "navigating": "アプリ画面へ切り替え中…",
+    "running": "起動完了",
+    "failed": "起動失敗",
+  };
+  status(stages[p.stage] || p.stage || "", p.stage !== "failed" && p.stage !== "running");
+  if (p.message) status((stages[p.stage] || p.stage) + " — " + p.message, p.stage !== "failed");
+});
+
+/* ---- wiring ---- */
+
+$("btn-download").addEventListener("click", startDownload);
+$("btn-retry-download").addEventListener("click", startDownload);
+$("btn-save-token").addEventListener("click", saveToken);
+$("btn-delete-token").addEventListener("click", deleteToken);
+$("btn-start").addEventListener("click", startBackend);
+$("btn-retry-start").addEventListener("click", startBackend);
+document.querySelectorAll("a.link").forEach((a) => {
+  a.addEventListener("click", (e) => {
+    e.preventDefault();
+    invoke("open_external", { url: a.dataset.url }).catch(() => {});
+  });
+});
+
+(async function init() {
+  await refresh();
+  if (setup && setup.runtime_installed) {
+    // Runtime already present: launch straight away.
+    startBackend();
+  }
+})();
+</script>
+</body>
+</html>

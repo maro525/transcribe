@@ -171,12 +171,14 @@
         <span class="status-line">
             <span id="state-badge" class="state-badge">idle</span>
             <span id="elapsed"></span>
+            <span id="native-capture" style="display:none;">ネイティブキャプチャ中 (システム音声)</span>
             <span id="connection">connecting...</span>
         </span>
     </div>
     <p class="hint">
-        システム音声を選ぶ場合は、共有ダイアログで対象（画面またはタブ）を選び、
-        <strong>「音声を共有」にチェック</strong>を入れてください。
+        システム音声はデスクトップアプリ側でネイティブにキャプチャされます
+        （共有ダイアログは表示されません）。マイクを選ぶとブラウザの
+        マイク入力を使用します。
     </p>
 
     <div class="graph-panel">
@@ -215,6 +217,7 @@
         const startBtn = document.getElementById("start-btn");
         const stopBtn = document.getElementById("stop-btn");
         const stateBadge = document.getElementById("state-badge");
+        const nativeCaptureEl = document.getElementById("native-capture");
         const elapsedEl = document.getElementById("elapsed");
         const connectionEl = document.getElementById("connection");
         const transcriptEl = document.getElementById("transcript");
@@ -332,6 +335,8 @@
             startBtn.disabled = !(wsReady && msg.state === "idle");
             stopBtn.disabled = !(wsReady && msg.state === "recording");
             sourceSelect.disabled = msg.state !== "idle";
+            nativeCaptureEl.style.display =
+                msg.state === "recording" && msg.source === "system" ? "" : "none";
 
             elapsedBase = msg.elapsed_sec || 0;
             if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
@@ -640,27 +645,14 @@
         }
 
         // --- audio capture ----------------------------------------------------
-        async function captureStream(source) {
-            if (source === "system") {
-                const stream = await navigator.mediaDevices.getDisplayMedia({
-                    video: true,
-                    audio: true,
-                });
-                stream.getVideoTracks().forEach((track) => track.stop());
-                if (stream.getAudioTracks().length === 0) {
-                    stream.getTracks().forEach((track) => track.stop());
-                    throw new Error("音声トラックが取得できません。共有ダイアログで「音声を共有」にチェックを入れてください。");
-                }
-                return stream;
-            }
-            return navigator.mediaDevices.getUserMedia({
+        // Mic only: the "system" source is captured natively by the desktop
+        // shell (WASAPI loopback fed through a second WS client), so the page
+        // never touches getDisplayMedia / AudioContext for it — it only sends
+        // the start/stop control messages.
+        async function startCapture() {
+            mediaStream = await navigator.mediaDevices.getUserMedia({
                 audio: { echoCancellation: true, noiseSuppression: true },
             });
-        }
-
-        async function startCapture() {
-            const source = sourceSelect.value;
-            mediaStream = await captureStream(source);
             audioContext = new AudioContext();
             await audioContext.audioWorklet.addModule(workletUrl);
             const input = audioContext.createMediaStreamSource(mediaStream);
@@ -672,13 +664,12 @@
             };
             input.connect(workletNode);
             capturing = true;
-            // If the user stops sharing from the browser chrome, end the meeting.
+            // If the mic track dies (device unplugged etc.), end the meeting.
             mediaStream.getAudioTracks().forEach((track) => {
                 track.addEventListener("ended", () => {
                     if (serverState === "recording") sendStop();
                 });
             });
-            return source;
         }
 
         function stopCapture() {
@@ -700,8 +691,11 @@
 
         startBtn.addEventListener("click", async () => {
             startBtn.disabled = true;
+            const source = sourceSelect.value;
             try {
-                const source = await startCapture();
+                if (source !== "system") {
+                    await startCapture();
+                }
                 ws.send(JSON.stringify({ type: "start", source }));
             } catch (error) {
                 stopCapture();

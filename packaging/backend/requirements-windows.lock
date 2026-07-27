@@ -1,0 +1,32 @@
+# =============================================================================
+# LOCKFILE-PLACEHOLDER — DO NOT SHIP. DO NOT HAND-EDIT REAL PINS INTO THIS FILE.
+# =============================================================================
+#
+# This file MUST be regenerated on a Windows x64 host (or the windows-2022 CI
+# runner) with CPython 3.12 BEFORE the first release:
+#
+#   powershell -ExecutionPolicy Bypass -File packaging\backend\make-lock.ps1
+#
+# That command runs pip-compile (pip-tools 7.4.1) with --generate-hashes against
+#   index      : https://pypi.org/simple
+#   extra index: https://download.pytorch.org/whl/cpu   (CPU-only torch 2.2.2)
+# from the repo-root requirements.txt, and overwrites this file with fully pinned
+# transitive dependencies + real sha256 hashes for cp312 / win_amd64 wheels.
+#
+# Hashes are deliberately NOT pre-filled here: fabricating hashes would make
+# `pip install --require-hashes` fail (or worse, mask a supply-chain check).
+#
+# Guards that depend on this file:
+#   - packaging/backend/build.ps1 refuses to build while the LOCKFILE-PLACEHOLDER
+#     marker above is present.
+#   - make-lock.ps1 -Check (run in CI) fails while the marker is present, and
+#     fails whenever this file drifts from requirements.txt.
+#
+# Expected top-level pins after generation (from requirements.txt as of Phase A):
+#   torch==2.2.2 (+cpu wheel from the CPU index), torchaudio==2.2.2,
+#   pyannote.audio==3.1.1, numpy==1.26.4, numba==0.60.0, onnxruntime==1.20.1,
+#   transformers>=4.52,<5 (resolved+pinned), pywhispercpp==1.5.0, fastapi,
+#   uvicorn[standard], jinja2, openai-whisper, silero-vad, python-dotenv==1.0.1,
+#   tiktoken, more-itertools, tqdm, janome, anthropic — plus all transitives.
+#   NO nvidia-* / CUDA packages may appear (build.ps1 enforces this).
+# =============================================================================

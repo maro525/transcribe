@@ -1,0 +1,48 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Transcribe",
+  "version": "0.1.0",
+  "identifier": "com.nsketch.transcribe",
+  "build": {
+    "frontendDist": "bootstrap"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "resources": {
+      "../main.py": "main.py",
+      "../src": "src",
+      "../packaging/ffmpeg/ffmpeg.exe": "ffmpeg/ffmpeg.exe",
+      "../packaging/ffmpeg/LICENSE.txt": "ffmpeg/LICENSE.txt",
+      "../packaging/ffmpeg/SOURCE.txt": "ffmpeg/SOURCE.txt",
+      "../packaging/backend/manifest.json": "backend-manifest.json"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["Japanese", "English"]
+      }
+    },
+    "createUpdaterArtifacts": false
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://PLACEHOLDER.invalid/transcribe/updater/{{target}}/{{arch}}/{{current_version}}"
+      ],
+      "pubkey": "PLACEHOLDER_UPDATER_PUBKEY_GENERATE_WITH_tauri_signer_generate"
+    }
+  }
+}

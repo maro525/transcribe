@@ -16,6 +16,8 @@ Responsibilities:
 """
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import threading
 import wave
@@ -36,6 +38,24 @@ from .vad import SileroVad, UtteranceSegmenter
 Listener = Callable[[dict[str, Any]], None]
 
 _INT16_SCALE = 32768.0
+
+# In-progress recordings carry this suffix (live_<id>.wav.part) and are
+# atomically renamed to .wav on graceful finalize; leftovers are repaired at
+# startup by src/live/recovery.py.
+PART_SUFFIX = ".part"
+
+# Audio source captured natively by the desktop (Tauri) shell. Transitions
+# for this source are announced on stdout as TAURI_EVENT lines so the Rust
+# side (which drains our stdout) can start/stop the WASAPI loopback capture.
+SYSTEM_SOURCE = "system"
+
+
+def _emit_tauri_event(capture: str, session_id: str) -> None:
+    """One TAURI_EVENT line on stdout (frozen contract with the Rust shell)."""
+    payload = json.dumps(
+        {"capture": capture, "session_id": session_id}, ensure_ascii=False
+    )
+    print(f"TAURI_EVENT {payload}", flush=True)
 
 
 class LiveSessionError(RuntimeError):
@@ -107,7 +127,7 @@ class LiveSessionManager:
 
             session_id = self._unique_session_id(datetime.now())
             self._temp_dir.mkdir(parents=True, exist_ok=True)
-            wav_path = self._temp_dir / f"live_{session_id}.wav"
+            wav_path = self._temp_dir / f"live_{session_id}.wav{PART_SUFFIX}"
 
             try:
                 vad = self._vad_factory()
@@ -144,6 +164,8 @@ class LiveSessionManager:
 
             live_state.set_live_active()
             worker.start()
+        if source == SYSTEM_SOURCE:
+            _emit_tauri_event("start", session_id)
         self._broadcast(self.status())
 
     def feed_pcm(self, data: bytes) -> None:
@@ -174,6 +196,7 @@ class LiveSessionManager:
             wav = self._wav
             wav_path = self._wav_path
             session_id = self._session_id
+            source = self._source
         self._broadcast(self.status())
 
         try:
@@ -183,9 +206,15 @@ class LiveSessionManager:
             worker.stop(wait_seconds=60.0)
             wav.close()
 
+            # Graceful finalize: atomically drop the .part suffix first, so a
+            # crash between here and the move leaves a well-formed WAV, and
+            # only in-progress recordings ever carry .part (recovery marker).
+            final_wav = wav_path.with_suffix("")  # live_<id>.wav.part -> .wav
+            os.replace(wav_path, final_wav)
+
             target = self._unique_target(session_id)
             self._source_dir.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(wav_path), str(target))
+            shutil.move(str(final_wav), str(target))
 
             draft = self._draft_path
             self._broadcast(
@@ -207,6 +236,8 @@ class LiveSessionManager:
                 self._session_id = None
                 self._source = None
                 live_state.clear_live_active()
+            if source == SYSTEM_SOURCE and session_id:
+                _emit_tauri_event("stop", session_id)
             self._broadcast(self.status())
 
     # --- listeners / reconnect recovery ------------------------------------
@@ -288,6 +319,7 @@ class LiveSessionManager:
             or (self._source_dir / f"meeting_{candidate}.wav").exists()
             or (self._done_dir / f"meeting_{candidate}.wav").exists()
             or (self._temp_dir / f"live_{candidate}.wav").exists()
+            or (self._temp_dir / f"live_{candidate}.wav{PART_SUFFIX}").exists()
         ):
             candidate = f"{base}_{counter}"
             counter += 1
