@@ -1,0 +1,130 @@
+{
+  "runId": "8a0fa64d",
+  "agent": "delegate",
+  "task": "Logic review of the Tauri desktop app implementation. Read and review these files for bugs, edge cases, error handling, race conditions, and logic errors:\n\nPython backend:\n- /home/dev/src/transcribe/main.py\n- /home/dev/src/transcribe/src/web/app.py\n- /home/dev/src/transcribe/src/live/session.py\n- /home/dev/src/transcribe/src/live/recovery.py\n- /home/dev/src/transcribe/src/ffmpeg_patch.py\n- /home/dev/src/transcribe/src/live/moonshine_fetch.py\n\nRust shell:\n- /home/dev/src/transcribe/src-tauri/src/main.rs\n- /home/dev/src/transcribe/src-tauri/src/process.rs\n- /home/dev/src/transcribe/src-tauri/src/capture.rs\n- /home/dev/src/transcribe/src-tauri/src/webview.rs\n- /home/dev/src/transcribe/src-tauri/src/downloader.rs\n\nTests to cross-check against implementation:\n- /home/dev/src/transcribe/tests/test_wav_recovery.py\n- /home/dev/src/transcribe/tests/test_live_ws_feeder.py\n- /home/dev/src/transcribe/tests/test_dynamic_port.py\n\nIMPORTANT: Pay special attention to whether test_wav_recovery.py's test_finished_wavs_in_temp_are_left_alone is consistent with recovery.py's second loop that scans live_*.wav. The test creates live_done.wav and expects it to NOT be moved, but recovery.py has a loop `for orphan in sorted(temp_dir.glob('live_*.wav'))` that would move it. Check if this is a real contradiction.\n\nAlso check: shutdown timing (Python waits 65s, Rust kills after 75s — is the ordering correct?), feeder WS client counting, resampler aliasing, broadcast channel overflow semantics. Do NOT run builds or tests. Static review only. Write your findings to /tmp/logic-review.md with items tagged [critical/major/minor/info] and a summary at the top.\n\n---\n**Output:**\nWrite your findings to exactly this path: /tmp/logic-review.md\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.",
+  "exitCode": 0,
+  "usage": {
+    "input": 69359,
+    "output": 27134,
+    "cacheRead": 167835,
+    "cacheWrite": 0,
+    "cost": 0.2399891,
+    "turns": 6
+  },
+  "model": "fireworks/accounts/fireworks/models/glm-5p2",
+  "attemptedModels": [
+    "fireworks/accounts/fireworks/models/glm-5p2"
+  ],
+  "modelAttempts": [
+    {
+      "model": "fireworks/accounts/fireworks/models/glm-5p2",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 69359,
+        "output": 27134,
+        "cacheRead": 167835,
+        "cacheWrite": 0,
+        "cost": 0.2399891,
+        "turns": 6
+      }
+    }
+  ],
+  "durationMs": 450197,
+  "toolCount": 17,
+  "acceptance": {
+    "status": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only task wording"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only task wording"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "13 concrete findings with file paths, line references, and severity tags (1 critical, 2 major, 5 minor, 5 info) covering the recovery.py/test contradiction, feeder WS test breakage, PYTHONHOME env risk, shutdown timing, dead shutdown_requested flag, downloader traversal, resampler aliasing, broadcast overflow, and client-counting semantics."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "grep shutdown_requested src-tauri/src/**/*.rs",
+          "result": "passed",
+          "summary": "Confirmed shutdown_requested is only stored false (main.rs:336) and read (main.rs:381), never set true — dead code."
+        },
+        {
+          "command": "grep LIVE_DISCONNECT_FINALIZE_SECONDS src/**/*.py",
+          "result": "passed",
+          "summary": "Confirmed 60s default disconnect-finalize timer, consistent with shutdown-timing analysis."
+        }
+      ],
+      "validationOutput": [
+        "Static cross-check: recovery.py second loop glob('live_*.wav') matches test's live_done.wav → would move it → test asserts [] and keeper.exists() → guaranteed failure.",
+        "Static cross-check: TestClient sends no Origin by default (confirmed by test_same_origin_browser_is_accepted explicitly setting Origin) → control client is feeder → start/stop text frames silently dropped → _wait times out.",
+        "Static cross-check: build_env_block always injects PYTHONHOME='' even when parent lacks it → risk of breaking bundled Python prefix resolution.",
+        "Shutdown timing: Python 65s finalize + 5s uvicorn graceful = 70s < Rust 75s → correct ordering, 5s margin."
+      ],
+      "residualRisks": [
+        "CI will fail on test_finished_wavs_in_temp_are_left_alone (recovery.py second-loop contradiction) until resolved.",
+        "CI will fail on test_feeder_without_origin_header_is_accepted_and_feeds_same_session and test_feeder_disconnect_does_not_kill_session_while_control_connected until control client sets Origin header.",
+        "First-launch backend may fail if bundled python-build-standalone does not tolerate PYTHONHOME=\"\" — must verify on real Windows build.",
+        "Recording data loss possible if live finalize exceeds 65s budget during shutdown (daemon thread abandoned, WAV not moved to input/).",
+        "Entire Rust shell is unverified (WSL2 dev host, never compiled for Windows); all windows-rs/webview2-com/cpal signatures written from memory."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No files changed. Static review only; findings written to /tmp/logic-review.md.",
+      "reviewFindings": [
+        "critical: src/live/recovery.py:69-74 — second loop glob('live_*.wav') moves test's live_done.wav, contradicting test_finished_wavs_in_temp_are_left_alone which expects it left alone. Guaranteed test failure.",
+        "major: src/web/app.py live_ws + tests/test_live_ws_feeder.py — TestClient sends no Origin by default, so control client is classified as feeder (is_feeder=True); start/stop JSON control messages are silently dropped (not is_feeder guard). Two feeder tests cannot pass.",
+        "major: src-tauri/src/process.rs contract_env/build_env_block — PYTHONHOME=\"\" always injected; CPython may not treat empty PYTHONHOME as unset, risking broken prefix resolution and backend startup failure on bundled runtime.",
+        "minor: src/web/app.py + src-tauri/src/process.rs — shutdown timing 70s (Python) vs 75s (Rust): correct ordering but only 5s margin; finalize >65s causes data loss.",
+        "minor: src-tauri/src/main.rs — shutdown_requested flag never set to true; dead code, relies on mutex-take guard instead.",
+        "minor: src-tauri/src/downloader.rs resolve_python_exe — manifest python_exe path not validated against traversal (low risk, bundled manifest).",
+        "minor: src-tauri/src/capture.rs LinearResampler — no anti-aliasing filter on 48k→16k downsample (acknowledged v1 limitation).",
+        "minor: src-tauri/src/capture.rs Pipeline::push_f32 — chunks_exact drops partial trailing frames at channel boundaries (negligible in practice)."
+      ],
+      "manualNotes": "The task specifically asked about the recovery.py second loop vs test_finished_wavs_in_temp_are_left_alone contradiction — confirmed it is REAL and will cause a test failure. The implementation's behavior (recovering stranded live_*.wav) is arguably correct per its docstring; the test appears stale. Separately discovered that two test_live_ws_feeder.py tests are also broken due to TestClient's lack of a default Origin header, which is a distinct test-implementation mismatch not called out in the task."
+    }
+  },
+  "transcriptPath": "/home/dev/src/transcribe/.pi-subagents/artifacts/8a0fa64d_delegate_1_transcript.jsonl",
+  "timestamp": 1785248316965
+}

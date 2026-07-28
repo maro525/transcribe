@@ -207,16 +207,23 @@ def test_missing_temp_dir_is_a_noop():
         assert recover_orphaned_wavs(base / "nope", base / "i") == []
 
 
-def test_finished_wavs_in_temp_are_left_alone():
+def test_stranded_finalized_wav_is_recovered():
+    # A finalized-but-stranded live_<id>.wav (no .part suffix) is the kill
+    # window between session.stop()'s .part -> .wav rename and the move to
+    # input/ (see recovery.py docstring). It is already a well-formed WAV
+    # and must be moved to input/ as-is, not left behind.
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
         temp_dir, source_dir = base / "t", base / "i"
         temp_dir.mkdir()
-        keeper = temp_dir / "live_done.wav"  # no .part suffix — not orphaned
-        keeper.write_bytes(_wav_header() + b"\x00\x00" * SR * 2)
+        stranded = temp_dir / "live_done.wav"
+        stranded.write_bytes(_wav_header() + b"\x00\x00" * SR * 2)
 
-        assert recover_orphaned_wavs(temp_dir, source_dir) == []
-        assert keeper.exists()
+        recovered = recover_orphaned_wavs(temp_dir, source_dir)
+
+        assert [p.name for p in recovered] == ["recovered_live_done.wav"]
+        assert not stranded.exists()
+        assert (source_dir / "recovered_live_done.wav").exists()
 
 
 if __name__ == "__main__":

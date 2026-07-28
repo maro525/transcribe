@@ -71,6 +71,7 @@ FastAPI + Jinja2（テンプレート内インライン JS/CSS、ビルドステ
   - ③ ランタイム archive は **GitHub Releases (public 前提)** + **v1 は無署名**（SmartScreen/Defender 回避手順を README 記載）。コード署名は将来課題として保留
 - 2026-07-26: システム音声 PCM の経路設計: **Rust が `/live/ws` への第 2 の WS クライアント（PCM 送信専用）となり、`feed_pcm` 契約 (`src/live/session.py:149`) は無変更**。開始/停止の伝達はフロントエンド→既存 WS 制御メッセージ→バックエンドが stdout に `TAURI_EVENT` 行を出力→Rust が drain 中の stdout から検知（remote ページへの Tauri IPC 解禁を回避）。リサンプリング（デバイス既定 48kHz/f32 → 16kHz/mono/s16le）は **Rust 側の責務**。却下案: フロントエンド IPC 経由（`dangerousRemoteDomainIpcAccess` が必要になり設計方針と矛盾）/ HTTP チャンク POST（レイテンシ・オーバーヘッド）
 - 2026-07-26: status: awaiting-approval → implementing (Gate 1 passed)
+- 2026-07-28: [team-review] FAIL — 4 レビュアー並列（Quality/Logic/Security/Simplify）→ Lead 統合。Phase A で2件のテスト不整合を静的確認（cc3f8b7 fix が OpenCode 指摘を修正した際テストを更新せず破壊）: ① recovery.py 第2ループ vs test_finished_wavs_in_temp_are_left_alone、② test_live_ws_feeder control クライアント Origin ヘッダー不足。Phase B/C の Rust 構造エラー（AppState フィールド不足・spawn_controller 引数不一致）は task file policy により初回ビルド修正前提で FAIL 要件から除外。pytest は sandbox でブロックされ未実行（verification gap、単独では FAIL ではない）。修正条件: 3テスト修正 + pytest 再確認 → PASS 再判定可能。status: implementing → review-failed
 
 ## Design
 
@@ -166,7 +167,78 @@ CUDA 環境 / Windows ARM64 native / backend 差分更新 / remote ページへ�
 Phase B/C 全体、CREATE_NO_WINDOW 実効果、実 openai-whisper への patch 適用、pywhispercpp win_amd64 動作、WebView2 でのフォント描画・マイク許可・feeder 実接続、WASAPI loopback 実機動作
 
 ## Review
-<!-- team-review が記入 -->
+
+### Result: FAIL
+
+> 4 レビュアー（Quality / Logic / Security / Simplify）並列実行 → Lead 統合。2026-07-28。
+> Phase B/C は全体未検証（WSL2 制約）のため静的レビューのみ。Phase A は pytest 237 passed と申告されているが、sandbox が python/pytest をブロックするため本環境ではテスト未実行（後述）。ただし、静的解析により Phase A のテスト不整合を2件確認した（cc3f8b7 fix コミットが OpenCode 指摘を修正した際、対応するテストを更新せず破壊）。
+
+### Code Review Results
+
+#### [critical] recovery.py 第2ループが test_finished_wavs_in_temp_are_left_alone と矛盾（Phase A）
+- **files:** `src/live/recovery.py:69-74`, `tests/test_wav_recovery.py:test_finished_wavs_in_temp_are_left_alone`
+- `recover_orphaned_wavs` の第2ループ `for orphan in sorted(temp_dir.glob("live_*.wav"))` は `live_done.wav` にもマッチし移動する。テストは `live_done.wav` を作成し `assert recover_orphaned_wavs(...) == []` + `assert keeper.exists()` を期待する。両 assert が失敗する。
+- **原因:** cc3f8b7 が OpenCode 指摘「recovery scans only `*.wav.part`, permanently stranding the recording」を修正し第2ループを追加したが、既存テストを更新しなかった。
+- **修正方向:** テストを更新して第2ループの回収セマンティクスに合わせる（stranded finalized WAV は回収されるのが正しい挙動）。テスト名も `test_stranded_finalized_wav_is_recovered` 等に変更すべき。
+
+#### [critical] test_live_ws_feeder.py の control クライアントが Origin ヘッダー不足で制御メッセージが無視される（Phase A）
+- **files:** `src/web/app.py:live_ws`, `tests/test_live_ws_feeder.py`
+- Starlette TestClient は WebSocket 接続時に Origin ヘッダーを送信しない。`live_ws` は `is_feeder = not websocket.headers.get("origin")` で feeder 判定し、feeder の text frame は `not is_feeder` で弾かれる。テストの control クライアントは Origin なし → feeder 扱い → `send_json({"type":"start"})` が無視 → `_wait(state == "recording")` が timeout。
+- **影響:** `test_feeder_without_origin_header_is_accepted_and_feeds_same_session` と `test_feeder_disconnect_does_not_kill_session_while_control_connected` の2テストが失敗する。
+- **原因:** cc3f8b7 が OpenCode 指摘「第2 PCM feeder が client count にカウントされる」を修正し `is_feeder` フラグを導入したが、テストの control クライアントに Origin ヘッダーを付与しなかった。
+- **修正方向:** control クライアントに `headers={"Origin": "http://testserver"}` を付与する。feeder クライアントは Origin なしのまま。
+
+#### [major] shutdown_requested フラグが dead code（Phase B — 初回ビルドで修正前提）
+- **files:** `src-tauri/src/main.rs`
+- `AppState.shutdown_requested` は `false` に初期化され `on_backend_exit` で読まれるが、`true` に設定するコードパスが存在しない。`shutdown_backend` が `take()` で handle を先に取得するため機能的には安全だが、フラグは dead logic であり、race で「予期せぬ終了」UI が誤発火しうる。
+- **Phase B 全体未検証のため FAIL 要件からは除外**（task file policy: 初回ビルドで機械的修正前提）。
+
+#### [major] Rust 構造エラー: AppState 初期化不足 + spawn_controller 引数不一致（Phase B — 初回ビルドで修正前提）
+- **files:** `src-tauri/src/main.rs`
+- `app.manage(AppState { ... })` が `feeder_token` と `shutdown_requested` の2フィールドを未初期化（コンパイルエラー）。`capture::spawn_controller(port.clone())` が引数1個だが定義は2個（`feeder_token` も必要）。
+- これらは「API シグネチャ」ではなく構造的コードエラーだが、Phase B は全体未検証であり task file policy により初回ビルド修正が前提化されている。**FAIL 要件からは除外**。
+
+#### [major] バックエンド HTTP 配信に CSP/frame-ancestors ヘッダーなし（Phase A — v1 では notes 扱い）
+- **files:** `src/web/app.py`
+- Tauri CSP は bootstrap origin のみ保護。`http://127.0.0.1:<port>/` へ遷移後は FastAPI が CSP なしで UI を配信する。Jinja2 autoescape は有効だが defense-in-depth がない。ローカルアプリのため v1 では notes 扱いとする。
+
+#### [major] シャットダウン secret が子プロセス（ffmpeg）環境に漏洩（Phase A — v1 では notes 扱い）
+- **files:** `src-tauri/src/process.rs:contract_env`, `src/ffmpeg_patch.py`
+- `TRANSCRIBE_SHUTDOWN_SECRET` が sidecar env に入り、ffmpeg がそれを継承する。ffmpeg は信頼済みバイナリのため即時 RCE ではないが、不要な secret 伝播面。v1 では notes 扱い。
+
+#### [major] PYTHONHOME="" が bundled Python の prefix 解決を破壊する可能性（Phase B — 初回ビルドで検証前提）
+- **files:** `src-tauri/src/process.rs:contract_env`
+- `PYTHONHOME` を空文字で設定すると CPython が embedded path config を使わず `sys.prefix=""` になる場合がある。python-build-standalone の `._pth` で上書きされれば問題ないが、実機検証必須。Phase B 未検証のため FAIL 要件から除外。
+
+### Integration Summary
+
+- **共通発見（severity 昇格）:** `shutdown_requested` dead code は Quality/Logic/Simplify 3レビュアーが独立に指摘 → major 確定。`AppState` 初期化不足は Quality/Simplify 2レビュアーが指摘 → Phase B だが構造エラーとして major 確定。
+- **個別発見:** Logic が recovery.py テスト矛盾と test_live_ws_feeder Origin ヘッダー問題を特定（他レビュアーはテスト交叉チェックを担当しなかったため単独発見）。Security が CSP なし・secret 漏洩・feeder token 未設定時の無認証を特定。
+- **OpenCode 指摘の裁定（v1 acceptable vs release-blocking）:**
+  - ✅ Resolved by cc3f8b7: WS feeder incoming poll（select! 追加）、feeder client count 除外（is_feeder）、current-runtime.json atomic write、Content-Range 検証、shutdown timing（75s > 70s）、moonshine thread start failure、stranded .wav 回収（第2ループ追加 — ただしテスト破壊を引き起こした）
+  - ✅ Acceptable for v1（deferred）: windows-rs API シグネチャ（機械的修正）、linear resampler aliasing（documented v1 limitation）、batch worker no stop path（Job Object でカバー）、ffmpeg_patch private symbol（defensive no-op）、zip bomb（trusted source + SHA-256）、manifest python_exe traversal（bundled manifest、safe_runtime_record で読み取り時検証）
+  - ⚠️ Release-blocking: recovery.py テスト矛盾 + test_live_ws_feeder Origin ヘッダー（Phase A の test failure）
+
+### Runtime Verification
+
+- **テスト未実行（sandbox 制約）:** 本 sandbox は `python`/`pytest`/`uv venv`/`uv run pytest` および `/tmp/claude-1000` 配下の venv をパーミッションチェックでブロックする。pytest を実行できなかった。これは sandbox 制約による verification gap であり、単独では FAIL ではない。
+- **静的解析による確認:** 上記2件のテスト不整合は静的コード読解で確認した（回帰テスト実行不要レベルの自明な矛盾）。
+  - recovery.py: `glob("live_*.wav")` が `live_done.wav` にマッチし `_move_recovered` で移動 → `assert ... == []` が失敗
+  - test_live_ws_feeder: TestClient は Origin ヘッダー未送信 → `is_feeder=True` → control message が無視 → `_wait(state == "recording")` が timeout
+- **Phase B/C:** cargo check 不可（WSL2）、CI 不可。静的レビューのみ実施。コンパイルエラー2件（AppState フィールド不足・spawn_controller 引数不一致）を静的に確認したが、task file policy により初回ビルド修正が前提化されているため FAIL 要件から除外。
+- **pin ファイル:** `python-pin.json` sha256 = `REPLACE_ME`、`pin.json` 全項目 = `REPLACE_ME`、`requirements-windows.lock` = placeholder marker。いずれもガード付きで捏造ハッシュなし。リリースブロッカーとして既知（task file 記載通り）。
+
+### Notes for Next Phase (Deploy)
+
+1. **【修正必須 — FAIL 解除条件】** cc3f8b7 が破壊した3テストを修正:
+   - `test_wav_recovery.py::test_finished_wavs_in_temp_are_left_alone` → 第2ループの回収セマンティクスに合わせて更新（テスト名変更 + assert 反転）
+   - `test_live_ws_feeder.py` の control クライアントに `headers={"Origin": "http://testserver"}` を付与（2テスト分）
+   - 修正後に pytest 237+ passed を再確認すること
+2. **【初回 Windows ビルドで修正】** Rust 構造エラー: `AppState` に `feeder_token`/`shutdown_requested` 追加、`spawn_controller` に `feeder_token` 引数追加、`shutdown_backend` で `shutdown_requested = true` 設定
+3. **【初回 Windows ビルドで検証】** `PYTHONHOME=""` が python-build-standalone で問題ないか確認。問題あれば parent に `PYTHONHOME` がある場合のみ上書き
+4. **【defense-in-depth — v1 では見送り可】** バックエンド HTTP に CSP + X-Frame-Options: DENY 追加、子プロセス env から `TRANSCRIBE_SHUTDOWN_SECRET`/`HF_TOKEN` 削除
+5. **【リリースブロッカー — 実 pin 待ち】** python-pin.json sha256、ffmpeg pin.json、requirements-windows.lock を Windows 実機/CI で生成
+6. **リファクタリング候補（将来）:** `download_with_resume` 分割、`start_backend_inner` 分割、protocol version 一元化、`on_backend_exit` イベント型統一、Cargo.toml tokio features 精査、`resolve_python_exe` フォールバック削減
 
 ## Deploy
 <!-- deploy が記入 -->

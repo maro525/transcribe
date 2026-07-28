@@ -101,17 +101,23 @@ def test_feeder_without_origin_header_is_accepted_and_feeds_same_session(tmp_pat
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
         with _patched_manager(base) as manager:
-            client = TestClient(app_module.create_app())
+            # base_url sets the Host header to 127.0.0.1 (passes the
+            # DNS-rebinding allowlist); the control client must present an
+            # Origin so live_ws treats it as the browser path (not the
+            # Origin-less feeder role, whose text control frames are ignored).
+            client = TestClient(app_module.create_app(), base_url="http://127.0.0.1")
             # Client 1: browser control path (start/stop + own PCM).
-            # TestClient sends no Origin header by default — same trust model
-            # as the Rust feeder; the check must allow both.
-            with client.websocket_connect("/live/ws") as control:
+            with client.websocket_connect(
+                "/live/ws", headers={"Origin": "http://127.0.0.1"}
+            ) as control:
                 assert control.receive_json()["type"] == "status"  # replay
                 control.send_json({"type": "start", "source": "system"})
                 _wait(lambda: manager.status()["state"] == "recording")
                 session_id = manager.status()["session_id"]
 
-                # Client 2: the native feeder — binary frames only.
+                # Client 2: the native feeder — binary frames only (no
+                # Origin header → feeder role, authenticated by X-Feeder-Token
+                # when the shutdown secret is set; here it is unset).
                 with client.websocket_connect("/live/ws") as feeder:
                     assert feeder.receive_json()["type"] == "status"
                     feeder.send_bytes(_pcm_bytes(0.5, 1.0))
@@ -140,7 +146,7 @@ def test_cross_origin_browser_is_still_rejected():
 
     with tempfile.TemporaryDirectory() as tmp:
         with _patched_manager(Path(tmp)):
-            client = TestClient(app_module.create_app())
+            client = TestClient(app_module.create_app(), base_url="http://127.0.0.1")
             try:
                 with client.websocket_connect(
                     "/live/ws", headers={"Origin": "http://evil.example"}
@@ -159,10 +165,10 @@ def test_same_origin_browser_is_accepted():
 
     with tempfile.TemporaryDirectory() as tmp:
         with _patched_manager(Path(tmp)):
-            client = TestClient(app_module.create_app())
-            # TestClient's Host is "testserver"; a matching Origin must pass.
+            client = TestClient(app_module.create_app(), base_url="http://127.0.0.1")
+            # base_url pins Host to 127.0.0.1; a matching Origin must pass.
             with client.websocket_connect(
-                "/live/ws", headers={"Origin": "http://testserver"}
+                "/live/ws", headers={"Origin": "http://127.0.0.1"}
             ) as websocket:
                 assert websocket.receive_json()["type"] == "status"
 
@@ -177,8 +183,10 @@ def test_feeder_disconnect_does_not_kill_session_while_control_connected():
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
         with _patched_manager(base) as manager:
-            client = TestClient(app_module.create_app())
-            with client.websocket_connect("/live/ws") as control:
+            client = TestClient(app_module.create_app(), base_url="http://127.0.0.1")
+            with client.websocket_connect(
+                "/live/ws", headers={"Origin": "http://127.0.0.1"}
+            ) as control:
                 control.receive_json()
                 control.send_json({"type": "start", "source": "system"})
                 _wait(lambda: manager.status()["state"] == "recording")
