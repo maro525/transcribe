@@ -10,7 +10,9 @@
 //!   "url": "https://github.com/<org>/<repo>/releases/download/backend-2026.07.1/cpu-2026.07.1.zip",
 //!   "sha256": "<hex>",
 //!   "size": 734003200,
-//!   "python_exe": "python.exe" }        // optional, relative to archive root
+//!   "python_exe": "runtime/python.exe" }  // optional, relative to archive root
+//!                                          // (build.ps1 zips everything under
+//!                                          //  a top-level runtime/ folder)
 //! ```
 //!
 //! Flow:
@@ -84,19 +86,65 @@ fn emit_progress(app: &AppHandle, phase: &'static str, downloaded: u64, total: u
     );
 }
 
+/// `version` is used to build on-disk paths (`cpu-<version>/`, `.partial`
+/// names): restrict it to a safe charset so a tampered manifest cannot inject
+/// path separators or traversal.
+fn valid_version(v: &str) -> bool {
+    !v.is_empty() && v.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
 /// Reads the bundled backend manifest from the resource dir.
 pub fn read_manifest(paths: &AppPaths) -> Result<BackendManifest, String> {
     let path = paths.resource_dir.join("backend-manifest.json");
     let data = fs::read_to_string(&path)
         .map_err(|e| format!("backend-manifest.json not found at {}: {e}", path.display()))?;
-    serde_json::from_str(&data).map_err(|e| format!("backend-manifest.json is invalid: {e}"))
+    let manifest: BackendManifest =
+        serde_json::from_str(&data).map_err(|e| format!("backend-manifest.json is invalid: {e}"))?;
+    if !valid_version(&manifest.version) {
+        return Err(format!(
+            "backend-manifest.json version {:?} contains characters outside [A-Za-z0-9._-]",
+            manifest.version
+        ));
+    }
+    if !manifest.url.starts_with("https://") {
+        return Err(format!(
+            "backend-manifest.json url must start with https:// (got {:?})",
+            manifest.url
+        ));
+    }
+    Ok(manifest)
 }
 
-/// Returns the installed runtime (from current-runtime.json) if its python.exe
-/// actually exists on disk.
+/// current-runtime.json is app-data, not code — but it is still an input that
+/// something else could have tampered with. Only accept layouts that stay
+/// inside `<app-data>/runtimes/<dir>/` and actually point at a `python.exe`.
+fn safe_runtime_record(cur: &CurrentRuntime) -> bool {
+    use std::path::Component;
+    // `dir` must be a single normal component (no separators, no "..", no
+    // drive prefix) so `runtimes_dir.join(dir)` cannot escape runtimes/.
+    let dir_ok = {
+        let mut comps = Path::new(&cur.dir).components();
+        matches!((comps.next(), comps.next()), (Some(Component::Normal(_)), None))
+    };
+    // `python_exe` must be relative with only normal components, and its file
+    // name must be exactly python.exe.
+    let pe = Path::new(&cur.python_exe);
+    let pe_ok = pe
+        .components()
+        .all(|c| matches!(c, Component::Normal(_)))
+        && pe.file_name().map(|n| n == "python.exe").unwrap_or(false);
+    dir_ok && pe_ok
+}
+
+/// Returns the installed runtime (from current-runtime.json) if its recorded
+/// layout is safe (see `safe_runtime_record`) and its python.exe actually
+/// exists on disk.
 pub fn installed_runtime(paths: &AppPaths) -> Option<(CurrentRuntime, PathBuf)> {
     let data = fs::read_to_string(paths.root.join("current-runtime.json")).ok()?;
     let cur: CurrentRuntime = serde_json::from_str(&data).ok()?;
+    if !safe_runtime_record(&cur) {
+        return None;
+    }
     let python = paths.runtimes_dir.join(&cur.dir).join(&cur.python_exe);
     python.is_file().then_some((cur, python))
 }
@@ -169,8 +217,12 @@ pub async fn download_and_install(app: &AppHandle, paths: &AppPaths) -> Result<(
         protocol: crate::process::EXPECTED_PROTOCOL,
     };
     let json = serde_json::to_string_pretty(&record).map_err(|e| e.to_string())?;
-    fs::write(paths.root.join("current-runtime.json"), json)
-        .map_err(|e| format!("write current-runtime.json: {e}"))?;
+    // Atomic write: temp file + rename, so a crash mid-write can never leave a
+    // truncated current-runtime.json behind.
+    let tmp = paths.root.join("current-runtime.json.tmp");
+    fs::write(&tmp, json).map_err(|e| format!("write {}: {e}", tmp.display()))?;
+    fs::rename(&tmp, paths.root.join("current-runtime.json"))
+        .map_err(|e| format!("rename current-runtime.json.tmp into place: {e}"))?;
 
     let _ = fs::remove_file(&partial);
     emit_progress(app, "done", manifest.size, manifest.size, 0);
@@ -224,6 +276,9 @@ async fn download_with_resume(
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(20))
             // No global timeout: this is a multi-hundred-MB streaming download.
+            // Deliberately NOT .no_proxy(): users behind corporate proxies may
+            // need one to reach GitHub for this large download. Integrity is
+            // guaranteed by the SHA-256 check, not by the transport path.
             .build()
             .map_err(|e| e.to_string())?;
 
@@ -231,7 +286,30 @@ async fn download_with_resume(
         if downloaded > 0 {
             req = req.header(reqwest::header::RANGE, format!("bytes={downloaded}-"));
         }
-        let resp = req.send().await.map_err(|e| format!("download request failed: {e}"))?;
+        let mut resp = req.send().await.map_err(|e| format!("download request failed: {e}"))?;
+
+        // 206 sanity: the resumed offset the server declares must match our
+        // local partial length, or appended bytes would land at the wrong
+        // offset. On mismatch, restart from zero with a fresh full request.
+        if resp.status().as_u16() == 206 {
+            let declared_start = resp
+                .headers()
+                .get(reqwest::header::CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(parse_content_range_start);
+            if declared_start != Some(downloaded) {
+                hasher = Sha256::new();
+                downloaded = 0;
+                resp = client
+                    .get(&manifest.url)
+                    .send()
+                    .await
+                    .map_err(|e| format!("download request failed: {e}"))?;
+                if resp.status().as_u16() == 206 {
+                    return Err("server answered 206 to a full (non-Range) request".into());
+                }
+            }
+        }
 
         let status = resp.status();
         let mut file = match status.as_u16() {
@@ -305,10 +383,17 @@ async fn download_with_resume(
 }
 
 /// Extracts a zip archive with zip-slip protection.
+///
+/// Two layers: `enclosed_name()` rejects absolute/`..` entry names up front,
+/// and (belt and braces) every write target's parent is canonicalized and
+/// checked to still be inside the destination directory.
 fn extract_zip(archive: &Path, dest: &Path) -> Result<(), String> {
     let file = fs::File::open(archive).map_err(|e| format!("open archive: {e}"))?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("invalid zip archive: {e}"))?;
     fs::create_dir_all(dest).map_err(|e| format!("create {}: {e}", dest.display()))?;
+    let dest_canon = dest
+        .canonicalize()
+        .map_err(|e| format!("canonicalize {}: {e}", dest.display()))?;
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| format!("zip entry {i}: {e}"))?;
         let Some(rel) = entry.enclosed_name() else {
@@ -317,9 +402,20 @@ fn extract_zip(archive: &Path, dest: &Path) -> Result<(), String> {
         let out_path = dest.join(rel);
         if entry.is_dir() {
             fs::create_dir_all(&out_path).map_err(|e| format!("mkdir {}: {e}", out_path.display()))?;
+            let canon = out_path
+                .canonicalize()
+                .map_err(|e| format!("canonicalize {}: {e}", out_path.display()))?;
+            if !canon.starts_with(&dest_canon) {
+                return Err(format!("zip entry {i} escapes the destination dir (zip-slip)"));
+            }
         } else {
-            if let Some(parent) = out_path.parent() {
-                fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+            let parent = out_path.parent().unwrap_or(dest);
+            fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+            let parent_canon = parent
+                .canonicalize()
+                .map_err(|e| format!("canonicalize {}: {e}", parent.display()))?;
+            if !parent_canon.starts_with(&dest_canon) {
+                return Err(format!("zip entry {i} escapes the destination dir (zip-slip)"));
             }
             let mut out = fs::File::create(&out_path)
                 .map_err(|e| format!("create {}: {e}", out_path.display()))?;
@@ -331,17 +427,27 @@ fn extract_zip(archive: &Path, dest: &Path) -> Result<(), String> {
 }
 
 /// Finds python.exe inside a freshly extracted runtime tree. Honors the
-/// manifest's `python_exe` first, then the layouts python-build-standalone
-/// archives are known to use.
+/// manifest's `python_exe` first (packaging/backend/build.ps1 emits
+/// "runtime/python.exe"), then the layouts python-build-standalone archives
+/// and our own packaging are known to use. The `runtime/` variants match the
+/// build.ps1 zip layout (everything under a top-level `runtime/` folder), so
+/// first-run install works even with a manifest that lacks `python_exe`.
 fn resolve_python_exe(dir: &Path, manifest_rel: Option<&str>) -> Result<String, String> {
     let mut candidates: Vec<String> = Vec::new();
     if let Some(rel) = manifest_rel {
         candidates.push(rel.to_string());
     }
     candidates.extend(
-        ["python.exe", "python/python.exe", "install/python.exe", "python/install/python.exe"]
-            .iter()
-            .map(|s| s.to_string()),
+        [
+            "python.exe",
+            "runtime/python.exe",
+            "python/python.exe",
+            "install/python.exe",
+            "runtime/install/python.exe",
+            "python/install/python.exe",
+        ]
+        .iter()
+        .map(|s| s.to_string()),
     );
     for rel in &candidates {
         if dir.join(rel).is_file() {
@@ -352,6 +458,19 @@ fn resolve_python_exe(dir: &Path, manifest_rel: Option<&str>) -> Result<String, 
         "python.exe not found in the extracted runtime (tried: {})",
         candidates.join(", ")
     ))
+}
+
+/// Parses the start offset out of a `Content-Range: bytes <start>-<end>/<total>`
+/// header value.
+fn parse_content_range_start(value: &str) -> Option<u64> {
+    value
+        .trim()
+        .strip_prefix("bytes ")?
+        .split('-')
+        .next()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 fn hex_lower(bytes: &[u8]) -> String {

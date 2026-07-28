@@ -124,7 +124,15 @@ def start_background_download(dest: Path | None = None) -> bool:
             with _lock:
                 _status = DOWNLOAD_DONE
 
-    threading.Thread(target=_run, daemon=True, name="moonshine-download").start()
+    thread = threading.Thread(target=_run, daemon=True, name="moonshine-download")
+    try:
+        thread.start()
+    except Exception as error:
+        # Never leave the status stuck at "downloading" when no worker runs.
+        with _lock:
+            _status = DOWNLOAD_FAILED
+            _error = f"could not start download thread: {error}"
+        raise
     return True
 
 

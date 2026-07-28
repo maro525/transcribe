@@ -118,19 +118,23 @@ pub struct AppState {
     pub allowed_origin: webview::AllowedOrigin,
     /// Command channel into the system-audio capture controller.
     pub capture_tx: tokio::sync::mpsc::UnboundedSender<capture::CaptureCommand>,
+    /// Current TRANSCRIBE_SHUTDOWN_SECRET, mirrored for the capture feeder's
+    /// `X-Feeder-Token` handshake header (set on every backend spawn).
+    pub feeder_token: Arc<Mutex<String>>,
     download_running: AtomicBool,
     backend_starting: AtomicBool,
+    /// True while WE are tearing the backend down; lets the exit monitor
+    /// distinguish a requested shutdown from an unexpected backend death.
+    shutdown_requested: AtomicBool,
 }
 
 #[derive(Serialize)]
 struct SetupStatus {
     runtime_installed: bool,
     runtime_version: Option<String>,
-    manifest_version: Option<String>,
     manifest_size: Option<u64>,
     disk_free: Option<u64>,
     has_hf_token: bool,
-    backend_running: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -154,19 +158,12 @@ fn get_setup_status(state: State<'_, AppState>) -> SetupStatus {
     SetupStatus {
         runtime_installed: installed.is_some(),
         runtime_version: installed.map(|(cur, _)| cur.version),
-        manifest_version: manifest.as_ref().map(|m| m.version.clone()),
         manifest_size: manifest.as_ref().map(|m| m.size),
         disk_free: disk_free_bytes(&state.paths.root).ok(),
         has_hf_token: hf_token_entry()
             .and_then(|e| e.get_password().map_err(|e| e.to_string()))
             .is_ok(),
-        backend_running: state.backend.lock().map(|g| g.is_some()).unwrap_or(false),
     }
-}
-
-#[tauri::command]
-fn check_disk_space(state: State<'_, AppState>) -> Result<u64, String> {
-    disk_free_bytes(&state.paths.root)
 }
 
 #[tauri::command]
@@ -269,6 +266,11 @@ async fn start_backend_inner(app: &AppHandle, state: &State<'_, AppState>) -> Re
     let mut secret_bytes = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut secret_bytes);
     let secret: String = secret_bytes.iter().map(|b| format!("{b:02x}")).collect();
+    // Mirror the secret for the capture feeder's X-Feeder-Token header
+    // (frozen contract: same value as TRANSCRIBE_SHUTDOWN_SECRET).
+    if let Ok(mut tok) = state.feeder_token.lock() {
+        *tok = secret.clone();
+    }
 
     let env: Vec<(OsString, OsString)> = process::contract_env(
         &state.paths.data_dir,
@@ -331,12 +333,75 @@ async fn start_backend_inner(app: &AppHandle, state: &State<'_, AppState>) -> Re
     }
 
     state.port.store(ready.port, Ordering::SeqCst);
+    state.shutdown_requested.store(false, Ordering::SeqCst);
     *state.backend.lock().unwrap() = Some(handle);
 
+    // Backend death detection: a monitor thread waits on the process handle
+    // and reacts if the backend dies without us having requested it.
+    // Spawned on the stored handle (under the lock) so the monitor cannot miss
+    // an exit that happens between spawn and store. 【未検証】
+    {
+        let guard = state.backend.lock().unwrap();
+        if let Some(h) = guard.as_ref() {
+            let app_for_monitor = app.clone();
+            let monitor = process::spawn_exit_monitor(
+                h,
+                Box::new(move |code| on_backend_exit(&app_for_monitor, code)),
+            );
+            if let Err(e) = monitor {
+                // Non-fatal: the app still works, it just cannot auto-detect
+                // a backend crash.
+                eprintln!("[shell] backend exit monitor unavailable: {e}");
+            }
+        }
+    }
+
     emit_backend_status(app, "navigating", None);
-    webview::navigate_to_backend(app, &state.allowed_origin, ready.port)?;
+    if let Err(first) = webview::navigate_to_backend(app, &state.allowed_origin, ready.port) {
+        // The backend IS running at this point; keep state consistent and
+        // retry once. If the retry also fails, return the error — a later
+        // start_backend call takes the "already running" path and simply
+        // re-navigates.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        webview::navigate_to_backend(app, &state.allowed_origin, ready.port).map_err(
+            |second| format!("ナビゲーションに失敗しました (1回目: {first} / 再試行: {second})"),
+        )?;
+    }
     emit_backend_status(app, "running", Some(format!("backend {}", ready.backend_version)));
     Ok(())
+}
+
+/// Called by the exit-monitor thread when the backend process terminates.
+/// Requested shutdowns (shutdown_requested flag) are ignored; an unexpected
+/// death clears the backend slot, closes its handles, and notifies the UI.
+fn on_backend_exit(app: &AppHandle, code: Option<u32>) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    if state.shutdown_requested.load(Ordering::SeqCst) {
+        return; // normal, requested teardown — shutdown_backend owns cleanup
+    }
+    let taken = state.backend.lock().ok().and_then(|mut g| g.take());
+    state.port.store(0, Ordering::SeqCst);
+    let Some(handle) = taken else {
+        return; // already cleared (double-fire guard)
+    };
+    // Process is already dead: this returns quickly, closes the process/job
+    // handles, and the Job close reaps any orphaned descendants (ffmpeg).
+    process::shutdown_blocking(&handle);
+    let code_str = code.map(|c| c.to_string()).unwrap_or_else(|| "unknown".into());
+    eprintln!("[shell] backend process exited unexpectedly (code {code_str})");
+    // `stage` keeps the bootstrap page's existing listener working; `state` +
+    // `code` are the documented shape for backend-death notifications.
+    let _ = app.emit(
+        "backend-status",
+        serde_json::json!({
+            "stage": "failed",
+            "state": "failed",
+            "code": code,
+            "message": format!("バックエンドが予期せず終了しました (exit code {code_str})"),
+        }),
+    );
 }
 
 /// Polls GET /healthz until {"status":"ok"} (worker may still be loading).
@@ -369,15 +434,6 @@ async fn wait_healthz(port: u16) -> Result<(), String> {
         "/healthz が {}s 以内に ok になりませんでした（最終エラー: {last_err}）",
         HEALTH_TIMEOUT.as_secs()
     ))
-}
-
-#[tauri::command]
-fn backend_state(state: State<'_, AppState>) -> String {
-    match state.backend.lock().unwrap().as_ref() {
-        Some(h) => format!("running (port {}, backend {})", h.port, h.backend_version),
-        None if state.backend_starting.load(Ordering::SeqCst) => "starting".into(),
-        None => "stopped".into(),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -459,13 +515,11 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             get_setup_status,
-            check_disk_space,
             save_hf_token,
             delete_hf_token,
             open_external,
             start_runtime_download,
             start_backend,
-            backend_state,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build tauri application");

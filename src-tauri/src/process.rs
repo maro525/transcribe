@@ -12,9 +12,14 @@
 //!   and on system-audio transitions:
 //!     TAURI_EVENT {"capture": "start"|"stop", "session_id": "<str>"}
 //! - Graceful exit: POST /internal/shutdown with `X-Shutdown-Token: <secret>`,
-//!   wait up to 10 s for process exit, then TerminateProcess. The Job Object
-//!   (JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE) additionally kills the whole process
-//!   tree (incl. ffmpeg grandchildren) on ANY shell exit path, clean or not.
+//!   wait up to 75 s for process exit (Python finalize can take up to 60 s),
+//!   then TerminateProcess. If the handshake never completed (port == 0) the
+//!   POST/wait is skipped and the process is terminated immediately. The Job
+//!   Object (JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE) additionally kills the whole
+//!   process tree (incl. ffmpeg grandchildren) on ANY shell exit path.
+//! - Env hardening (not part of the wire protocol): WEB_HOST is pinned to
+//!   127.0.0.1 and PYTHONPATH / PYTHONHOME / PYTHONSTARTUP are overridden to
+//!   empty strings so inherited values cannot leak into the sidecar.
 //!
 //! Spawn sequence (race-free job assignment):
 //!   CreateProcessW(CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT)
@@ -49,7 +54,9 @@ pub const EVENT_PREFIX: &str = "TAURI_EVENT ";
 /// Protocol version this shell speaks (must match `/healthz` and TAURI_READY).
 pub const EXPECTED_PROTOCOL: u64 = 1;
 
-const SHUTDOWN_WAIT_MS: u32 = 10_000;
+/// Python finalize (live-session flush + model teardown) can take up to 60 s;
+/// give it headroom before the TerminateProcess fallback.
+const SHUTDOWN_WAIT_MS: u32 = 75_000;
 const LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
 const LOG_KEEP: usize = 3;
 
@@ -357,6 +364,12 @@ pub fn spawn_backend(
     };
     let job = unsafe { CreateJobObjectW(None, PCWSTR::null()) }
         .map_err(|e| kill_suspended(format!("CreateJobObjectW: {e}")))?;
+    // Once the job exists, every early-return path must also close it, or the
+    // job handle leaks (and with it, later, KILL_ON_JOB_CLOSE never fires).
+    let kill_suspended_with_job = |reason: String| -> String {
+        close(job);
+        kill_suspended(reason)
+    };
     let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     // SAFETY: struct is fully initialized, size passed explicitly. 【未検証】
@@ -367,11 +380,11 @@ pub fn spawn_backend(
             &limits as *const _ as *const core::ffi::c_void,
             std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
         )
-        .map_err(|e| kill_suspended(format!("SetInformationJobObject: {e}")))?;
+        .map_err(|e| kill_suspended_with_job(format!("SetInformationJobObject: {e}")))?;
         AssignProcessToJobObject(job, pi.hProcess)
-            .map_err(|e| kill_suspended(format!("AssignProcessToJobObject: {e}")))?;
+            .map_err(|e| kill_suspended_with_job(format!("AssignProcessToJobObject: {e}")))?;
         if ResumeThread(pi.hThread) == u32::MAX {
-            return Err(kill_suspended("ResumeThread failed".into()));
+            return Err(kill_suspended_with_job("ResumeThread failed".into()));
         }
         close(pi.hThread);
     }
@@ -420,14 +433,20 @@ pub fn spawn_backend(
 // ---------------------------------------------------------------------------
 
 /// Contract shutdown: POST /internal/shutdown (X-Shutdown-Token), wait up to
-/// 10 s, TerminateProcess fallback, then close the Job handle so
-/// KILL_ON_JOB_CLOSE reaps any surviving descendants (ffmpeg etc.).
+/// 75 s (Python finalize can take up to 60 s), TerminateProcess fallback, then
+/// close the Job handle so KILL_ON_JOB_CLOSE reaps any surviving descendants
+/// (ffmpeg etc.).
+///
+/// If the TAURI_READY handshake never completed (`port == 0`) there is nothing
+/// to shut down gracefully: skip the HTTP POST and the long wait entirely and
+/// go straight to TerminateProcess + Job close.
 ///
 /// Deliberately uses a hand-rolled HTTP/1.1 request over std TcpStream so it
 /// can run synchronously from `RunEvent::ExitRequested` without touching the
 /// async runtime.
 pub fn shutdown_blocking(handle: &BackendHandle) {
-    if handle.port != 0 {
+    let graceful = handle.port != 0;
+    if graceful {
         let _ = post_shutdown(handle.port, &handle.secret);
     }
 
@@ -439,8 +458,14 @@ pub fn shutdown_blocking(handle: &BackendHandle) {
         let process = HANDLE(handle.process.0 as _);
         let job = HANDLE(handle.job.0 as _);
 
-        if WaitForSingleObject(process, SHUTDOWN_WAIT_MS) != WAIT_OBJECT_0 {
-            // Graceful path failed or timed out: hard kill.
+        if graceful {
+            if WaitForSingleObject(process, SHUTDOWN_WAIT_MS) != WAIT_OBJECT_0 {
+                // Graceful path failed or timed out: hard kill.
+                let _ = TerminateProcess(process, 1);
+                let _ = WaitForSingleObject(process, 2_000);
+            }
+        } else {
+            // Handshake never completed: immediate hard kill.
             let _ = TerminateProcess(process, 1);
             let _ = WaitForSingleObject(process, 2_000);
         }
@@ -448,6 +473,74 @@ pub fn shutdown_blocking(handle: &BackendHandle) {
         let _ = CloseHandle(job);
         let _ = CloseHandle(process);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Backend death detection
+// ---------------------------------------------------------------------------
+
+/// Spawns a monitor thread that blocks on the backend process handle
+/// (`WaitForSingleObject(..., INFINITE)`) and calls `on_exit` with the exit
+/// code (if retrievable) once the process terminates — for ANY reason,
+/// including our own graceful/hard shutdown; the caller is responsible for
+/// distinguishing requested shutdowns (see AppState.shutdown_requested).
+///
+/// The process handle is duplicated so the monitor is independent of the
+/// `BackendHandle`'s lifetime. 【未検証】windows-rs signatures from memory.
+#[cfg(windows)]
+pub fn spawn_exit_monitor(
+    handle: &BackendHandle,
+    on_exit: Box<dyn FnOnce(Option<u32>) + Send + 'static>,
+) -> Result<(), String> {
+    use windows::Win32::Foundation::{
+        CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE,
+    };
+    use windows::Win32::System::Threading::{
+        GetCurrentProcess, GetExitCodeProcess, WaitForSingleObject, INFINITE,
+    };
+
+    let process = HANDLE(handle.process.0 as _);
+    let mut dup = HANDLE::default();
+    // SAFETY: both handles are valid; the duplicate is owned by the monitor
+    // thread and closed there. 【未検証】
+    unsafe {
+        DuplicateHandle(
+            GetCurrentProcess(),
+            process,
+            GetCurrentProcess(),
+            &mut dup,
+            0,
+            false,
+            DUPLICATE_SAME_ACCESS,
+        )
+        .map_err(|e| format!("DuplicateHandle(backend process): {e}"))?;
+    }
+    let dup = RawHandleOwned(dup.0 as isize);
+    std::thread::Builder::new()
+        .name("backend-exit-monitor".into())
+        .spawn(move || {
+            let h = HANDLE(dup.0 as _);
+            // SAFETY: h is the duplicated, thread-owned handle. 【未検証】
+            let code = unsafe {
+                let _ = WaitForSingleObject(h, INFINITE);
+                let mut code: u32 = 0;
+                let got = GetExitCodeProcess(h, &mut code).is_ok();
+                let _ = CloseHandle(h);
+                got.then_some(code)
+            };
+            on_exit(code);
+        })
+        .map_err(|e| format!("spawn backend-exit-monitor thread: {e}"))?;
+    Ok(())
+}
+
+/// Non-Windows build: no sidecar, nothing to monitor.
+#[cfg(not(windows))]
+pub fn spawn_exit_monitor(
+    _handle: &BackendHandle,
+    _on_exit: Box<dyn FnOnce(Option<u32>) + Send + 'static>,
+) -> Result<(), String> {
+    Ok(())
 }
 
 fn post_shutdown(port: u16, secret: &str) -> std::io::Result<()> {
@@ -567,6 +660,13 @@ pub fn contract_env(
         // The resource dir may be under Program Files-like restrictions; never
         // try to write .pyc next to the bundled sources.
         ("PYTHONDONTWRITEBYTECODE".into(), "1".into()),
+        // Hardening (overrides anything inherited from the user session):
+        // pin the bind host, and neutralize interpreter-hijack env vars.
+        // CPython treats empty PYTHONHOME/PYTHONPATH/PYTHONSTARTUP as unset.
+        ("WEB_HOST".into(), "127.0.0.1".into()),
+        ("PYTHONPATH".into(), "".into()),
+        ("PYTHONHOME".into(), "".into()),
+        ("PYTHONSTARTUP".into(), "".into()),
     ];
     if let Some(token) = hf_token {
         env.push(("HF_TOKEN".into(), token.into()));

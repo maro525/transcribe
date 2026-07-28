@@ -4,6 +4,7 @@ import os
 import socket
 import threading
 from contextlib import asynccontextmanager
+from typing import Callable
 
 import uvicorn
 from fastapi import FastAPI
@@ -50,8 +51,15 @@ def _tauri_ready_line(port: int) -> str:
     return f"TAURI_READY {payload}"
 
 
-def _serve_dynamic_port(app: FastAPI) -> None:
+def _serve_dynamic_port(
+    app: FastAPI, prepare: Callable[[], None] | None = None
+) -> None:
     """Desktop mode: bind port 0, print TAURI_READY, serve on that socket.
+
+    ``prepare`` (heavy startup work: ffmpeg patch, recovery, worker
+    bootstrap) runs AFTER the TAURI_READY handshake so the Tauri shell
+    learns the port immediately; connections queue on the already-bound
+    socket until uvicorn starts accepting.
 
     The uvicorn server instance is stored on ``app.state`` so
     POST /internal/shutdown (src/web/app.py) can flip ``should_exit`` for a
@@ -68,10 +76,13 @@ def _serve_dynamic_port(app: FastAPI) -> None:
     )
     app.state.uvicorn_server = server
     print(_tauri_ready_line(port), flush=True)
+    if prepare is not None:
+        prepare()
     asyncio.run(server.serve(sockets=[sock]))
 
 
-def main() -> None:
+def _startup_tasks() -> None:
+    """Heavy pre-serve work, shared by both modes."""
     # Must run before any ffmpeg use (batch conversion and whisper's
     # internal calls): FFMPEG_PATH resolution + no console flash on Windows.
     ffmpeg_patch.apply()
@@ -83,10 +94,16 @@ def main() -> None:
 
     worker.bootstrap_history()
 
-    app = create_app(lifespan=lifespan)
+
+def main() -> None:
     if _dynamic_port_enabled():
-        _serve_dynamic_port(app)
+        # Handshake first: bind the socket and print TAURI_READY before any
+        # heavy work, so the desktop shell never waits on model imports.
+        app = create_app(lifespan=lifespan)
+        _serve_dynamic_port(app, prepare=_startup_tasks)
         return
+    _startup_tasks()
+    app = create_app(lifespan=lifespan)
     uvicorn.run(
         app,
         host=config.WEB_HOST,

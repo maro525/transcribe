@@ -14,6 +14,11 @@ stdlib ``wave`` module only patches the header on ``close()``.
   existing batch pipeline ingests it as a normal job,
 - deletes unsalvageable leftovers (unparseable header or < 1 s of audio).
 
+A second stranding window exists on graceful finalize: ``stop()`` renames
+``.part`` -> ``.wav`` and then moves the file to ``input/``. A kill between
+the rename and the move leaves a well-formed ``live_<id>.wav`` behind in the
+temp dir; those are moved to ``SOURCE_DIR/recovered_<name>.wav`` as-is.
+
 Stdlib-only (struct + shutil); never raises for a single bad file — a
 corrupt leftover must not block startup.
 """
@@ -48,7 +53,8 @@ class _WavLayout:
 
 
 def recover_orphaned_wavs(temp_dir: Path, source_dir: Path) -> list[Path]:
-    """Repair and re-ingest orphaned ``*.wav.part`` files. Returns the moves."""
+    """Repair/re-ingest orphaned ``*.wav.part`` and stranded finalized
+    ``live_*.wav`` files. Returns the moved targets."""
     recovered: list[Path] = []
     if not temp_dir.is_dir():
         return recovered
@@ -58,22 +64,35 @@ def recover_orphaned_wavs(temp_dir: Path, source_dir: Path) -> list[Path]:
                 part.unlink(missing_ok=True)
                 print(f"Live recovery: discarded unsalvageable {part.name}")
                 continue
-            source_dir.mkdir(parents=True, exist_ok=True)
-            target = _unique_recovered_target(source_dir, part.name)
-            shutil.move(str(part), str(target))
+            wav_name = part.name[: -len(_PART_SUFFIX)]  # drop .part
+            target = _move_recovered(part, source_dir, wav_name)
             recovered.append(target)
-            print(f"Live recovery: {part.name} -> {target}")
         except Exception as error:  # never block startup on one bad file
             print(f"Live recovery failed for {part.name}: {error}")
+    # Finalized-but-stranded recordings: killed between the .part -> .wav
+    # rename and the move to input/ (see session.stop()). Already
+    # well-formed WAVs — move them as-is.
+    for orphan in sorted(temp_dir.glob("live_*.wav")):
+        try:
+            recovered.append(_move_recovered(orphan, source_dir, orphan.name))
+        except Exception as error:
+            print(f"Live recovery failed for {orphan.name}: {error}")
     return recovered
 
 
-def _unique_recovered_target(source_dir: Path, part_name: str) -> Path:
-    stem = part_name[: -len(_PART_SUFFIX)]  # live_<id>.wav.part -> live_<id>.wav
-    target = source_dir / f"{RECOVERED_PREFIX}{stem}"
+def _move_recovered(path: Path, source_dir: Path, wav_name: str) -> Path:
+    source_dir.mkdir(parents=True, exist_ok=True)
+    target = _unique_recovered_target(source_dir, wav_name)
+    shutil.move(str(path), str(target))
+    print(f"Live recovery: {path.name} -> {target}")
+    return target
+
+
+def _unique_recovered_target(source_dir: Path, wav_name: str) -> Path:
+    target = source_dir / f"{RECOVERED_PREFIX}{wav_name}"
     counter = 2
     while target.exists():
-        target = source_dir / f"{RECOVERED_PREFIX}{Path(stem).stem}_{counter}.wav"
+        target = source_dir / f"{RECOVERED_PREFIX}{Path(wav_name).stem}_{counter}.wav"
         counter += 1
     return target
 

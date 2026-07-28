@@ -163,7 +163,7 @@
             音声ソース:
             <select id="source">
                 <option value="mic">マイク</option>
-                <option value="system">システム音声（会議アプリ等）</option>
+                <option value="system"{% if not desktop_mode %} disabled title="デスクトップアプリ版でのみ利用できます"{% endif %}>システム音声（会議アプリ等）</option>
             </select>
         </label>
         <button id="start-btn" class="primary" disabled>録音開始</button>

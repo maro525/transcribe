@@ -197,6 +197,11 @@ class LiveSessionManager:
             wav_path = self._wav_path
             session_id = self._session_id
             source = self._source
+        # Announce the stop as soon as the state flips to "finalizing" so the
+        # Rust shell halts native capture immediately (a finalize can take up
+        # to a minute; feeding PCM into it would be wasted work).
+        if source == SYSTEM_SOURCE and session_id:
+            _emit_tauri_event("stop", session_id)
         self._broadcast(self.status())
 
         try:
@@ -236,8 +241,6 @@ class LiveSessionManager:
                 self._session_id = None
                 self._source = None
                 live_state.clear_live_active()
-            if source == SYSTEM_SOURCE and session_id:
-                _emit_tauri_event("stop", session_id)
             self._broadcast(self.status())
 
     # --- listeners / reconnect recovery ------------------------------------

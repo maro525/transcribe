@@ -178,7 +178,7 @@ python main.py
 
 | 変数名 | デフォルト | 説明 |
 | --- | --- | --- |
-| `LIVE_ENGINE` | `moonshine` | ライブエンジン選択（`moonshine` / `whispercpp` / `auto`）。既定は CPU-first の moonshine（先に `scripts/fetch_moonshine_model.py` で重み取得）。`auto` は CUDA 検出時 whispercpp / 非 CUDA かつ moonshine 重みありで moonshine / それ以外 whispercpp CPU。GPU を使うなら `LIVE_ENGINE=auto` か `whispercpp` を指定 |
+| `LIVE_ENGINE` | `whispercpp` | ライブエンジン選択（`moonshine` / `whispercpp` / `auto`）。既定は whispercpp。CPU のみのホストでは `LIVE_ENGINE=moonshine`（先に `scripts/fetch_moonshine_model.py` で重み取得）を推奨。`auto` は CUDA 検出時 whispercpp / 非 CUDA かつ moonshine 重みありで moonshine / それ以外 whispercpp CPU |
 | `LIVE_MODEL_QUANT` | `q8_0` | ggml モデルの量子化（`f16` / `q8_0` / `q5_0`） |
 | `LIVE_MODEL_PATH` | `models/ggml-large-v3-turbo-<quant>.bin` | モデル重みのパス（指定時は `LIVE_MODEL_QUANT` より優先） |
 | `LIVE_MOONSHINE_MODEL_DIR` | `models/moonshine-tiny-ja` | Moonshine 重みディレクトリ |
@@ -248,7 +248,7 @@ GPU が使えないホスト向けの軽量ライブエンジンです。[Useful
 python scripts/fetch_moonshine_model.py
 ```
 
-- **エンジン選択**: 既定は `moonshine`（CPU-first。先に `scripts/fetch_moonshine_model.py` で重みを取得してください）。GPU の whisper.cpp を使う場合は `LIVE_ENGINE=whispercpp`、またはハードウェア自動選択の `LIVE_ENGINE=auto`（CUDA なし + moonshine 重みありのときだけ moonshine、GPU ホストは whispercpp）を指定します。
+- **エンジン選択**: 既定は `whispercpp` です。Moonshine を使うには `LIVE_ENGINE=moonshine` を明示的に指定します（先に `scripts/fetch_moonshine_model.py` で重みを取得してください）。ハードウェア自動選択の `LIVE_ENGINE=auto`（CUDA なし + moonshine 重みありのときだけ moonshine、GPU ホストは whispercpp）も利用できます。
 - **精度**: CER は Fleurs 17.87 / Common Voice 18.3 と large-v3-turbo より明確に劣りますが、ライブ表示のドラフト用途としては許容範囲です。正式な書き起こしは会議終了後のバッチ処理（openai-whisper + pyannote）が従来どおり生成します。
 - **レイテンシ**: 27M モデルのため CPU でも `LIVE_PARTIAL_INTERVAL_SECONDS=1.0` を維持できる想定です（whisper.cpp CPU の 2.5 秒推奨から改善）。長い発話はエンジン内部で 12 秒チャンクに分割して逐次デコードします（`LIVE_MOONSHINE_CHUNK_SECONDS`）。
 - **ライセンスに関する注意**: モデル重みは **Moonshine AI Community License**（MIT ではありません）で配布されています。研究・非商用利用は無償ですが、**商用利用（社内業務利用を含む）は年商 100 万ドル未満でも [moonshine.ai/community-license](https://moonshine.ai/community-license) での登録が必須**です。利用前に登録を済ませてください。
