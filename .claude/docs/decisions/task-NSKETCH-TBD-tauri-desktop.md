@@ -8,7 +8,7 @@
 - linear_id: NSKETCH-TBD (ローカル運用)
 - tier: L
 - created: 2026-07-26T00:56+09:00
-- status: review-passed (Gate 3) — deploy 待ち
+- status: completed (PR #17 open)
 
 ## Task Description
 この webapp (FastAPI + Jinja2 テンプレート + WebSocket/SSE、Whisper/pyannote/Moonshine の Python ML スタック) を Tauri でスタンドアロンのデスクトップアプリ化する。
@@ -73,6 +73,7 @@ FastAPI + Jinja2（テンプレート内インライン JS/CSS、ビルドステ
 - 2026-07-26: status: awaiting-approval → implementing (Gate 1 passed)
 - 2026-07-28: [team-review] FAIL — 4 レビュアー並列（Quality/Logic/Security/Simplify）→ Lead 統合。Phase A で2件のテスト不整合を静的確認（cc3f8b7 fix が OpenCode 指摘を修正した際テストを更新せず破壊）: ① recovery.py 第2ループ vs test_finished_wavs_in_temp_are_left_alone、② test_live_ws_feeder control クライアント Origin ヘッダー不足。Phase B/C の Rust 構造エラー（AppState フィールド不足・spawn_controller 引数不一致）は task file policy により初回ビルド修正前提で FAIL 要件から除外。pytest は sandbox でブロックされ未実行（verification gap、単独では FAIL ではない）。修正条件: 3テスト修正 + pytest 再確認 → PASS 再判定可能。status: implementing → review-failed
 - 2026-07-28: [team-review 再判定] PASS — 修正コミット eb4ab81 + cde1ceb で3件のテスト破壊を修復（recovery テスト反転 / WS Host ヘッダー明示付与 / moonshine ヘッダー case-insensitive）。ホスト環境で `uv run --with pytest ... python -m pytest -q` を実行し **246 passed** を確認（baseline 237 → +9）。Phase B/C の Rust 構造エラー・pin ファイル REPLACE_ME は初回 Windows ビルド/CI で処理する既知のリリースブロッカー（task file 記載通り、v1 FAIL 要件外）。status: review-failed → review-passed (Gate 3 PASS)
+- 2026-07-28: [deploy] feature/tauri-desktop push + PR #17 作成（base: main）。Phase A スモークテスト 246 passed 確認済み。Phase B/C は初回 Windows ビルドで検証。Linear MCP 未認証のため Linear 投稿スキップ（ローカル運用）。status: review-passed → completed
 
 ## Design
 
@@ -246,4 +247,35 @@ Phase B/C 全体、CREATE_NO_WINDOW 実効果、実 openai-whisper への patch 
 6. **リファクタリング候補（将来）:** `download_with_resume` 分割、`start_backend_inner` 分割、protocol version 一元化、`on_backend_exit` イベント型統一、Cargo.toml tokio features 精査、`resolve_python_exe` フォールバック削減
 
 ## Deploy
-<!-- deploy が記入 -->
+
+### デプロイ結果: SUCCESS
+
+### 実行内容
+- デプロイ日時: 2026-07-28T23:30+09:00
+- feature ブランチ: feature/tauri-desktop
+- PR: https://github.com/maro525/transcribe/pull/17 (base: main)
+- コミット履歴:
+  - b75ab3a feat(desktop): Tauri v2 standalone desktop app scaffold (Windows x64)
+  - cc3f8b7 fix(desktop): address OpenCode review findings (Python + Rust pre-build)
+  - eb4ab81 fix(desktop): repair tests broken by cc3f8b7 (team-review FAIL → re-judge)
+  - cde1ceb fix(desktop): repair 4 remaining test failures (WS Host + header casing)
+  - 6eec1a3 docs(task): tauri-desktop team-review re-judged PASS (246 passed), Gate 3 cleared
+
+### デプロイ後検証結果
+
+#### スモークテスト（ロジック系）
+- コマンド: `uv run --with pytest --with fastapi --with 'uvicorn[standard]' --with jinja2 --with httpx --with websockets --with pytest-asyncio --with numpy python -m pytest -q`
+- 結果: **246 passed, 1 warning in 3.32s**（ホスト環境で実行）
+- Phase B/C は WSL2 制約によりビルド未検証（静的レビューのみ）
+
+#### ブラウザ確認
+- 該当なし（デスクトップアプリ機能。WebView2 実機確認は初回 Windows ビルド後）
+
+### 申し送り事項（次タスク / 初回 Windows ビルド）
+1. **【初回 Windows ビルドで修正】** Rust 構造エラー: `AppState` に `feeder_token`/`shutdown_requested` 追加、`spawn_controller` に `feeder_token` 引数追加、`shutdown_backend` で `shutdown_requested = true` 設定。windows-rs 0.61 シグネチャ修正（CreatePipe/SetHandleInformation/CreateProcessW/GetDiskFreeSpaceExW/webview2-com getter）
+2. **【初回 Windows ビルドで検証】** `PYTHONHOME=""` が python-build-standalone で問題ないか確認。問題あれば parent に `PYTHONHOME` がある場合のみ上書き
+3. **【リリースブロッカー — 実 pin 待ち】** python-pin.json sha256、ffmpeg pin.json、requirements-windows.lock を Windows 実機/CI で生成
+4. **【defense-in-depth — v1 では見送り可】** バックエンド HTTP に CSP + X-Frame-Options: DENY 追加、子プロセス env から `TRANSCRIBE_SHUTDOWN_SECRET`/`HF_TOKEN` 削除
+5. **リファクタリング候補（将来）:** `download_with_resume` 分割、`start_backend_inner` 分割、protocol version 一元化、`on_backend_exit` イベント型統一、Cargo.toml tokio features 精査、`resolve_python_exe` フォールバック削減
+
+> Linear MCP 未認証のためローカル運用（Decision Log 記載）。Linear ステータス遷移・コメント投稿はスキップ。
