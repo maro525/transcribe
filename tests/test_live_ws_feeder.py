@@ -98,18 +98,22 @@ def test_feeder_without_origin_header_is_accepted_and_feeds_same_session(tmp_pat
         return
     import tempfile
 
+    # Starlette's TestClient.websocket_connect hardcodes ws://testserver as
+    # the URL origin (it ignores base_url), so the WS Host header is always
+    # "testserver" unless we override it explicitly. The DNS-rebinding
+    # allowlist in live_ws rejects non-loopback hosts with 1008, so every
+    # connection here pins Host: 127.0.0.1. The control client also sends an
+    # Origin so live_ws routes it through the browser path (the Origin-less
+    # feeder role ignores text control frames).
+    HOST = {"Host": "127.0.0.1"}
+    BROWSER = {"Host": "127.0.0.1", "Origin": "http://127.0.0.1"}
+
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
         with _patched_manager(base) as manager:
-            # base_url sets the Host header to 127.0.0.1 (passes the
-            # DNS-rebinding allowlist); the control client must present an
-            # Origin so live_ws treats it as the browser path (not the
-            # Origin-less feeder role, whose text control frames are ignored).
-            client = TestClient(app_module.create_app(), base_url="http://127.0.0.1")
+            client = TestClient(app_module.create_app())
             # Client 1: browser control path (start/stop + own PCM).
-            with client.websocket_connect(
-                "/live/ws", headers={"Origin": "http://127.0.0.1"}
-            ) as control:
+            with client.websocket_connect("/live/ws", headers=BROWSER) as control:
                 assert control.receive_json()["type"] == "status"  # replay
                 control.send_json({"type": "start", "source": "system"})
                 _wait(lambda: manager.status()["state"] == "recording")
@@ -118,7 +122,7 @@ def test_feeder_without_origin_header_is_accepted_and_feeds_same_session(tmp_pat
                 # Client 2: the native feeder — binary frames only (no
                 # Origin header → feeder role, authenticated by X-Feeder-Token
                 # when the shutdown secret is set; here it is unset).
-                with client.websocket_connect("/live/ws") as feeder:
+                with client.websocket_connect("/live/ws", headers=HOST) as feeder:
                     assert feeder.receive_json()["type"] == "status"
                     feeder.send_bytes(_pcm_bytes(0.5, 1.0))
                     _wait(lambda: manager.status()["elapsed_sec"] >= 1.0)
@@ -146,10 +150,11 @@ def test_cross_origin_browser_is_still_rejected():
 
     with tempfile.TemporaryDirectory() as tmp:
         with _patched_manager(Path(tmp)):
-            client = TestClient(app_module.create_app(), base_url="http://127.0.0.1")
+            client = TestClient(app_module.create_app())
             try:
                 with client.websocket_connect(
-                    "/live/ws", headers={"Origin": "http://evil.example"}
+                    "/live/ws",
+                    headers={"Host": "127.0.0.1", "Origin": "http://evil.example"},
                 ) as websocket:
                     message = websocket.receive()
                     assert message["type"] == "websocket.close"
@@ -165,10 +170,12 @@ def test_same_origin_browser_is_accepted():
 
     with tempfile.TemporaryDirectory() as tmp:
         with _patched_manager(Path(tmp)):
-            client = TestClient(app_module.create_app(), base_url="http://127.0.0.1")
-            # base_url pins Host to 127.0.0.1; a matching Origin must pass.
+            client = TestClient(app_module.create_app())
+            # Host pinned to 127.0.0.1 (websocket_connect ignores base_url);
+            # a matching Origin must pass the CSWSH same-origin check.
             with client.websocket_connect(
-                "/live/ws", headers={"Origin": "http://127.0.0.1"}
+                "/live/ws",
+                headers={"Host": "127.0.0.1", "Origin": "http://127.0.0.1"},
             ) as websocket:
                 assert websocket.receive_json()["type"] == "status"
 
@@ -183,14 +190,17 @@ def test_feeder_disconnect_does_not_kill_session_while_control_connected():
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
         with _patched_manager(base) as manager:
-            client = TestClient(app_module.create_app(), base_url="http://127.0.0.1")
+            client = TestClient(app_module.create_app())
             with client.websocket_connect(
-                "/live/ws", headers={"Origin": "http://127.0.0.1"}
+                "/live/ws",
+                headers={"Host": "127.0.0.1", "Origin": "http://127.0.0.1"},
             ) as control:
                 control.receive_json()
                 control.send_json({"type": "start", "source": "system"})
                 _wait(lambda: manager.status()["state"] == "recording")
-                with client.websocket_connect("/live/ws") as feeder:
+                with client.websocket_connect(
+                    "/live/ws", headers={"Host": "127.0.0.1"}
+                ) as feeder:
                     feeder.receive_json()
                     feeder.send_bytes(_pcm_bytes(0.5, 1.0))
                     _wait(lambda: manager.status()["elapsed_sec"] >= 1.0)

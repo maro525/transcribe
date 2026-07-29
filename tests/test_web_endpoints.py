@@ -255,7 +255,9 @@ def test_moonshine_post_without_internal_header_is_403():
         "/internal/models/moonshine", json={"accept_license": True}
     )
     assert response.status_code == 403
-    assert "X-Transcribe-Internal" in response.json()["detail"]
+    # INTERNAL_REQUEST_HEADER is lowercase ("x-transcribe-internal"); the
+    # detail message echoes it verbatim, so match case-insensitively.
+    assert "x-transcribe-internal" in response.json()["detail"].lower()
 
 
 def test_moonshine_post_malformed_json_is_400():
