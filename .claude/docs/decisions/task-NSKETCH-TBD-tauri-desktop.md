@@ -8,7 +8,7 @@
 - linear_id: NSKETCH-TBD (ローカル運用)
 - tier: L
 - created: 2026-07-26T00:56+09:00
-- status: awaiting-approval (Gate 1)
+- status: review-passed (Gate 3) — deploy 待ち
 
 ## Task Description
 この webapp (FastAPI + Jinja2 テンプレート + WebSocket/SSE、Whisper/pyannote/Moonshine の Python ML スタック) を Tauri でスタンドアロンのデスクトップアプリ化する。
@@ -72,6 +72,7 @@ FastAPI + Jinja2（テンプレート内インライン JS/CSS、ビルドステ
 - 2026-07-26: システム音声 PCM の経路設計: **Rust が `/live/ws` への第 2 の WS クライアント（PCM 送信専用）となり、`feed_pcm` 契約 (`src/live/session.py:149`) は無変更**。開始/停止の伝達はフロントエンド→既存 WS 制御メッセージ→バックエンドが stdout に `TAURI_EVENT` 行を出力→Rust が drain 中の stdout から検知（remote ページへの Tauri IPC 解禁を回避）。リサンプリング（デバイス既定 48kHz/f32 → 16kHz/mono/s16le）は **Rust 側の責務**。却下案: フロントエンド IPC 経由（`dangerousRemoteDomainIpcAccess` が必要になり設計方針と矛盾）/ HTTP チャンク POST（レイテンシ・オーバーヘッド）
 - 2026-07-26: status: awaiting-approval → implementing (Gate 1 passed)
 - 2026-07-28: [team-review] FAIL — 4 レビュアー並列（Quality/Logic/Security/Simplify）→ Lead 統合。Phase A で2件のテスト不整合を静的確認（cc3f8b7 fix が OpenCode 指摘を修正した際テストを更新せず破壊）: ① recovery.py 第2ループ vs test_finished_wavs_in_temp_are_left_alone、② test_live_ws_feeder control クライアント Origin ヘッダー不足。Phase B/C の Rust 構造エラー（AppState フィールド不足・spawn_controller 引数不一致）は task file policy により初回ビルド修正前提で FAIL 要件から除外。pytest は sandbox でブロックされ未実行（verification gap、単独では FAIL ではない）。修正条件: 3テスト修正 + pytest 再確認 → PASS 再判定可能。status: implementing → review-failed
+- 2026-07-28: [team-review 再判定] PASS — 修正コミット eb4ab81 + cde1ceb で3件のテスト破壊を修復（recovery テスト反転 / WS Host ヘッダー明示付与 / moonshine ヘッダー case-insensitive）。ホスト環境で `uv run --with pytest ... python -m pytest -q` を実行し **246 passed** を確認（baseline 237 → +9）。Phase B/C の Rust 構造エラー・pin ファイル REPLACE_ME は初回 Windows ビルド/CI で処理する既知のリリースブロッカー（task file 記載通り、v1 FAIL 要件外）。status: review-failed → review-passed (Gate 3 PASS)
 
 ## Design
 
@@ -168,7 +169,11 @@ Phase B/C 全体、CREATE_NO_WINDOW 実効果、実 openai-whisper への patch 
 
 ## Review
 
-### Result: FAIL
+### Result: PASS (re-judged 2026-07-28)
+
+> 初回 FAIL → 修正後再判定 PASS。Phase A テストはホスト環境で **246 passed** 確認済み。Phase B/C は全体未検証（WSL2 制約）のため静的レビューのみ — Rust 構造エラー・pin ファイル REPLACE_ME は初回 Windows ビルド/CI で処理する既知のリリースブロッカー（task file policy により v1 FAIL 要件外）。
+
+### 初回 FAIL から PASS への経緯
 
 > 4 レビュアー（Quality / Logic / Security / Simplify）並列実行 → Lead 統合。2026-07-28。
 > Phase B/C は全体未検証（WSL2 制約）のため静的レビューのみ。Phase A は pytest 237 passed と申告されているが、sandbox が python/pytest をブロックするため本環境ではテスト未実行（後述）。ただし、静的解析により Phase A のテスト不整合を2件確認した（cc3f8b7 fix コミットが OpenCode 指摘を修正した際、対応するテストを更新せず破壊）。
