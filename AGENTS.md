@@ -1,23 +1,23 @@
-# Current Project: NSKETCH-732 — SSE realtime dashboard planning
+# Current Project: ADHOC — Editable word network planning
 
 ## Goal
-- Plan a careful Server-Sent Events migration for the FastAPI Transcribe Dashboard, replacing normal 2-second polling with realtime updates.
+- Plan an editable post-batch word-network canvas with persistent node/edge changes and pinned layout positions.
 
 ## Key files
 - `src/web/app.py`
-- `src/web/templates/index.html`
-- `src/web/templates/_jobs.html`
-- `src/status.py`
-- `src/worker.py`
+- `src/web/templates/detail.html`
+- `src/artifacts.py`
+- `tests/test_artifacts.py`
+- `tests/test_web_app.py` (planned)
 
 ## Architecture
-- Native `EventSource` frontend.
-- FastAPI `StreamingResponse` endpoint at planned `GET /events`.
-- `StatusStore` remains the in-memory source of truth and gains publish/subscribe notification support.
-- Existing `/jobs` htmx partial remains as fallback/debug route.
+- Generated graph snapshot remains the immutable base.
+- A revisioned edit overlay lives in the existing graph artifact and is written atomically.
+- FastAPI exposes a validated `PUT /jobs/{filename}/graph-edits` endpoint.
+- The existing vanilla JS + Canvas renderer merges the overlay and reheats after edits.
 
 ## Decisions
-- Avoid new dependencies for v1.
-- Preserve synchronous worker thread model.
-- Send fresh `snapshot` on every connection/reconnect instead of implementing event replay.
-- Use heartbeat and bounded subscriber queues to make long-lived streams robust.
+- Use explicit edit mode and two-click edge creation to prevent accidental edits.
+- Dragging pins nodes using normalized coordinates; deletion hides generated elements or removes user elements.
+- Detect concurrent saves via revision/409; never silently overwrite.
+- Add no dependencies; do not touch live graph, treemap, or decision-flow network.
