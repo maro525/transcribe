@@ -168,6 +168,16 @@
         }
         .graph-body { position: relative; margin-top: 0.5rem; }
         #graph-canvas { width: 100%; height: 380px; display: block; }
+        .graph-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: -.2rem 0 .7rem; }
+        .graph-toolbar button, .graph-node-form button { font: inherit; font-size: .75rem; padding: .3rem .55rem; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--text); cursor: pointer; }
+        .graph-toolbar button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+        .graph-toolbar button:disabled { opacity: .5; cursor: not-allowed; }
+        .graph-save-status { font-size: .72rem; color: var(--muted); margin-left: auto; }
+        .graph-save-status.error { color: var(--err-text); }
+        .graph-node-form { display: none; gap: .35rem; margin: 0 0 .6rem; }
+        .graph-node-form.open { display: flex; }
+        .graph-node-form input { min-width: 0; flex: 1; font: inherit; padding: .35rem .5rem; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--text); }
+        .graph-help { margin: .25rem 0 0; font-size: .72rem; color: var(--muted); }
         .structure-body { position: relative; margin-top: 0.5rem; }
         #topics-canvas { width: 100%; display: block; border-radius: 8px; overflow: hidden; }
         .structure-note { color: var(--faint); font-size: 0.72rem; margin: 0.5rem 0 0; }
@@ -398,170 +408,45 @@
     <div class="kw-row">
     <div class="panel kw-network">
         <h2>言葉のネットワーク</h2>
-        {% if graph and graph.nodes %}
+        {% if graph %}
         <div class="graph-body">
+            <div class="graph-toolbar" data-graph-toolbar>
+                <button type="button" data-graph-edit aria-pressed="false">編集</button>
+                <button type="button" data-graph-add disabled>＋ ノード</button>
+                <button type="button" data-graph-connect disabled aria-pressed="false">接続</button>
+                <button type="button" data-graph-delete disabled>削除</button>
+                <button type="button" data-graph-unpin disabled>固定解除</button>
+                <span class="graph-save-status" aria-live="polite">保存済み</span>
+            </div>
+            <form class="graph-node-form" data-graph-node-form><input maxlength="120" placeholder="言葉を追加" aria-label="追加する言葉"><button>追加</button><button type="button" data-graph-cancel>取消</button></form>
             <canvas id="graph-canvas"></canvas>
+            <p class="graph-help" data-graph-help>編集を選ぶと、ノードの追加・接続・削除・ドラッグ固定ができます。</p>
         </div>
         <script type="application/json" id="graph-data">{{ graph|tojson }}</script>
+        <script type="application/json" id="graph-edits-data">{{ graph_edits|tojson }}</script>
         <script>
-        // Static word-network renderer, condensed from live.html (lines
-        // 406-594): WS handling / collapse toggle / incremental reheat paths
-        // removed. Consumes one CooccurrenceGraph.snapshot() as-is, lays out
-        // once, runs the rAF loop until energy drops below the rest
-        // threshold, then stops. Resize / tab re-show re-heat it.
         (() => {
-            const snapshot = JSON.parse(document.getElementById("graph-data").textContent);
-            const graphCanvas = document.getElementById("graph-canvas");
-            const graphCtx = graphCanvas.getContext("2d");
-
-            const GRAPH_REPULSION = 3200;   // O(n^2) pair repulsion, fine for <=40 nodes
-            const GRAPH_SPRING = 0.02;
-            const GRAPH_SPRING_LENGTH = 90;
-            const GRAPH_CENTER_PULL = 0.012;
-            const GRAPH_DAMPING = 0.85;
-            const GRAPH_MIN_ENERGY = 0.05;  // rest threshold: stop the rAF loop below it
-            const GRAPH_MARGIN = 14;
-
-            const graphNodes = new Map(); // id -> {x, y, vx, vy, weight, lastSeen}
-            let graphEdges = [];
-            let graphSeq = 0;
-            let graphRafId = null;
-
-            function graphSize() {
-                return { w: graphCanvas.clientWidth || 600, h: graphCanvas.clientHeight || 340 };
-            }
-
-            function resizeGraphCanvas() {
-                const dpr = window.devicePixelRatio || 1;
-                const { w, h } = graphSize();
-                graphCanvas.width = Math.round(w * dpr);
-                graphCanvas.height = Math.round(h * dpr);
-                graphCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            }
-
-            function applyGraph(msg) {
-                graphSeq = msg.seq || 0;
-                const { w, h } = graphSize();
-                (msg.nodes || []).forEach((n) => {
-                    graphNodes.set(n.id, {
-                        x: w / 2 + (Math.random() - 0.5) * 60,
-                        y: h / 2 + (Math.random() - 0.5) * 60,
-                        vx: 0,
-                        vy: 0,
-                        weight: n.weight,
-                        lastSeen: n.last_seen,
-                    });
-                });
-                graphEdges = (msg.edges || []).filter(
-                    (e) => graphNodes.has(e.a) && graphNodes.has(e.b)
-                );
-            }
-
-            function simulateGraph() {
-                const { w, h } = graphSize();
-                const nodes = Array.from(graphNodes.values());
-                for (let i = 0; i < nodes.length; i++) {
-                    for (let j = i + 1; j < nodes.length; j++) {
-                        const a = nodes[i];
-                        const b = nodes[j];
-                        let dx = a.x - b.x;
-                        let dy = a.y - b.y;
-                        let d2 = dx * dx + dy * dy;
-                        if (d2 < 1) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 1; }
-                        const dist = Math.sqrt(d2);
-                        const force = GRAPH_REPULSION / d2;
-                        const fx = (dx / dist) * force;
-                        const fy = (dy / dist) * force;
-                        a.vx += fx; a.vy += fy;
-                        b.vx -= fx; b.vy -= fy;
-                    }
-                }
-                graphEdges.forEach((edge) => {
-                    const a = graphNodes.get(edge.a);
-                    const b = graphNodes.get(edge.b);
-                    const dx = b.x - a.x;
-                    const dy = b.y - a.y;
-                    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-                    const pull = (dist - GRAPH_SPRING_LENGTH) * GRAPH_SPRING * Math.min(edge.weight, 4);
-                    const fx = (dx / dist) * pull;
-                    const fy = (dy / dist) * pull;
-                    a.vx += fx; a.vy += fy;
-                    b.vx -= fx; b.vy -= fy;
-                });
-                let energy = 0;
-                nodes.forEach((n) => {
-                    n.vx += (w / 2 - n.x) * GRAPH_CENTER_PULL;
-                    n.vy += (h / 2 - n.y) * GRAPH_CENTER_PULL;
-                    n.vx *= GRAPH_DAMPING;
-                    n.vy *= GRAPH_DAMPING;
-                    n.x = Math.max(GRAPH_MARGIN, Math.min(w - GRAPH_MARGIN, n.x + n.vx));
-                    n.y = Math.max(GRAPH_MARGIN, Math.min(h - GRAPH_MARGIN, n.y + n.vy));
-                    energy += n.vx * n.vx + n.vy * n.vy;
-                });
-                return nodes.length ? energy / nodes.length : 0;
-            }
-
-            function drawGraph() {
-                const { w, h } = graphSize();
-                const inkColor = getComputedStyle(document.body).color; // light/dark aware
-                graphCtx.clearRect(0, 0, w, h);
-                graphCtx.strokeStyle = inkColor;
-                graphEdges.forEach((edge) => {
-                    const a = graphNodes.get(edge.a);
-                    const b = graphNodes.get(edge.b);
-                    graphCtx.globalAlpha = Math.min(0.12 + edge.weight * 0.08, 0.55);
-                    graphCtx.lineWidth = Math.min(0.5 + edge.weight * 0.5, 3);
-                    graphCtx.beginPath();
-                    graphCtx.moveTo(a.x, a.y);
-                    graphCtx.lineTo(b.x, b.y);
-                    graphCtx.stroke();
-                });
-                graphCtx.textAlign = "center";
-                graphCtx.textBaseline = "bottom";
-                graphNodes.forEach((n, id) => {
-                    const age = Math.max(0, graphSeq - n.lastSeen);
-                    const fade = Math.max(0.35, 1 - age * 0.06); // older words dim out
-                    const radius = Math.min(4 + n.weight * 2, 16);
-                    graphCtx.globalAlpha = fade;
-                    graphCtx.fillStyle = window.detailTopics.hasStructure
-                        ? window.detailTopics.wordColor(id)
-                        : "#1a7f37";
-                    graphCtx.beginPath();
-                    graphCtx.arc(n.x, n.y, radius, 0, Math.PI * 2);
-                    graphCtx.fill();
-                    graphCtx.fillStyle = inkColor;
-                    graphCtx.font = (n.weight > 2 ? "600 " : "") + "12px sans-serif";
-                    graphCtx.fillText(id, n.x, n.y - radius - 3);
-                });
-                graphCtx.globalAlpha = 1;
-            }
-
-            function graphFrame() {
-                graphRafId = null;
-                if (document.hidden) return; // power saving: halt
-                const energy = simulateGraph();
-                drawGraph();
-                if (energy > GRAPH_MIN_ENERGY) {
-                    graphRafId = requestAnimationFrame(graphFrame);
-                }
-            }
-
-            function reheatGraph() {
-                if (document.hidden || graphRafId !== null) return;
-                graphRafId = requestAnimationFrame(graphFrame);
-            }
-
-            document.addEventListener("visibilitychange", () => {
-                if (!document.hidden) reheatGraph();
-            });
-            window.addEventListener("resize", () => {
-                resizeGraphCanvas();
-                reheatGraph();
-            });
-
-            resizeGraphCanvas();
-            applyGraph(snapshot);
-            reheatGraph();
+            const base = JSON.parse(document.getElementById("graph-data").textContent);
+            let edits = JSON.parse(document.getElementById("graph-edits-data").textContent);
+            const canvas = document.getElementById("graph-canvas"), ctx = canvas.getContext("2d");
+            const tools = document.querySelector("[data-graph-toolbar]");
+            const editButton = tools.querySelector("[data-graph-edit]"), addButton = tools.querySelector("[data-graph-add]");
+            const connectButton = tools.querySelector("[data-graph-connect]"), deleteButton = tools.querySelector("[data-graph-delete]");
+            const unpinButton = tools.querySelector("[data-graph-unpin]"), status = tools.querySelector(".graph-save-status");
+            const form = document.querySelector("[data-graph-node-form]"), input = form.querySelector("input"), help = document.querySelector("[data-graph-help]");
+            let editMode = false, connecting = false, connectFrom = null, selected = null, dragging = null, timer = null, raf = null, saving = false, dirty = false;
+            const nodes = new Map(), positions = new Map(); let edges = [];
+            const key = (a, b) => [a, b].sort().join("\u0000");
+            const size = () => ({ w: canvas.clientWidth || 600, h: canvas.clientHeight || 380 });
+            function merge() { const hidden=new Set(edits.hidden_node_ids||[]), hiddenEdges=new Set((edits.hidden_edges||[]).map(e=>key(e.a,e.b))); const specs=[...(base.nodes||[]),...(edits.nodes||[]).map(n=>({...n,weight:1,last_seen:base.seq||0}))].filter(n=>!hidden.has(n.id)); const ids=new Set(specs.map(n=>n.id)); edges=[...(base.edges||[]).map(e=>({...e,base:true})),...(edits.edges||[]).map(e=>({...e,weight:1,base:false}))].filter(e=>ids.has(e.a)&&ids.has(e.b)&&!hiddenEdges.has(key(e.a,e.b))); const {w,h}=size();positions.clear();(edits.positions||[]).forEach(p=>positions.set(p.id,p)); const next=new Map();specs.forEach((n,i)=>{const p=positions.get(n.id),old=nodes.get(n.id);next.set(n.id,{...n,x:p?p.x*w:(old?.x??w/2+(i%5-2)*40),y:p?p.y*h:(old?.y??h/2+(Math.floor(i/5)-2)*40),vx:0,vy:0});});nodes.clear();next.forEach((n,id)=>nodes.set(id,n));renderPairs(); }
+            function fit() { const dpr=devicePixelRatio||1,{w,h}=size();canvas.width=w*dpr;canvas.height=h*dpr;ctx.setTransform(dpr,0,0,dpr,0,0); }
+            function draw() { const {w,h}=size(),ink=getComputedStyle(document.body).color;ctx.clearRect(0,0,w,h);ctx.strokeStyle=ink;edges.forEach(e=>{const a=nodes.get(e.a),b=nodes.get(e.b);ctx.globalAlpha=.25;ctx.lineWidth=Math.min(3,.5+e.weight*.5);ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();});nodes.forEach((n,id)=>{const r=Math.min(16,4+n.weight*2),active=id===selected||id===connectFrom;ctx.globalAlpha=1;ctx.fillStyle=active?"#d97706":(window.detailTopics.hasStructure?window.detailTopics.wordColor(id):"#1a7f37");ctx.beginPath();ctx.arc(n.x,n.y,r+(active?2:0),0,Math.PI*2);ctx.fill();ctx.fillStyle=ink;ctx.font=(n.weight>2?"600 ":"")+"12px sans-serif";ctx.textAlign="center";ctx.textBaseline="bottom";ctx.fillText(id,n.x,n.y-r-3);}); }
+            function tick() { raf=null;const {w,h}=size(),all=[...nodes.values()];for(let i=0;i<all.length;i++)for(let j=i+1;j<all.length;j++){const a=all[i],b=all[j];let dx=a.x-b.x,dy=a.y-b.y,d=Math.max(1,dx*dx+dy*dy),f=1600/d;a.vx+=dx/Math.sqrt(d)*f;a.vy+=dy/Math.sqrt(d)*f;b.vx-=dx/Math.sqrt(d)*f;b.vy-=dy/Math.sqrt(d)*f;}edges.forEach(e=>{const a=nodes.get(e.a),b=nodes.get(e.b),dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||1,f=(d-90)*.015;a.vx+=dx/d*f;a.vy+=dy/d*f;b.vx-=dx/d*f;b.vy-=dy/d*f;});let energy=0;all.forEach(n=>{if(positions.has(n.id))return;n.vx=(n.vx+(w/2-n.x)*.01)*.84;n.vy=(n.vy+(h/2-n.y)*.01)*.84;n.x=Math.max(14,Math.min(w-14,n.x+n.vx));n.y=Math.max(14,Math.min(h-14,n.y+n.vy));energy+=n.vx*n.vx+n.vy*n.vy;});draw();if(energy/Math.max(1,all.length)>.04&&!document.hidden)raf=requestAnimationFrame(tick); }
+            const reheat=()=>{if(!raf&&!document.hidden)raf=requestAnimationFrame(tick);}; const point=e=>{const r=canvas.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top};}; function hitNode(p){let result=null,best=Infinity;nodes.forEach((n,id)=>{const d=Math.hypot(n.x-p.x,n.y-p.y),r=Math.min(16,4+n.weight*2)+10;if(d<r&&d<best){result=id;best=d;}});return result;} function hitEdge(p){let result=null,best=10;edges.forEach((edge,index)=>{const a=nodes.get(edge.a),b=nodes.get(edge.b),dx=b.x-a.x,dy=b.y-a.y,length=dx*dx+dy*dy;if(!length)return;const ratio=Math.max(0,Math.min(1,((p.x-a.x)*dx+(p.y-a.y)*dy)/length)),distance=Math.hypot(p.x-(a.x+ratio*dx),p.y-(a.y+ratio*dy));if(distance<best){best=distance;result=index;}});return result;}
+            function mutate(){dirty=true;merge();reheat();schedule();} function schedule(){clearTimeout(timer);status.textContent="未保存";status.className="graph-save-status";if(!saving)timer=setTimeout(save,450);} async function save(){if(saving||!dirty)return;saving=true;dirty=false;const submitted=JSON.parse(JSON.stringify(edits));status.textContent="保存中…";try{const res=await fetch({{ graph_edits_url|tojson }},{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({revision:submitted.revision,edits:Object.fromEntries(Object.entries(submitted).filter(([name])=>name!=="revision"))})}),data=await res.json();if(res.status===409){status.textContent="競合しました。再読み込みして再試行してください。";status.className="graph-save-status error";return;}if(!res.ok)throw Error(data.detail||"保存に失敗しました");if(dirty){edits.revision=data.edits.revision;}else{edits=data.edits;status.textContent="保存済み";}}catch(error){dirty=true;status.textContent="保存に失敗しました。再試行してください。";status.className="graph-save-status error";}finally{saving=false;if(dirty&&status.className!=="graph-save-status error")schedule();}}
+            function renderPairs(){const list=document.querySelector("[data-strong-edges]");if(!list)return;list.innerHTML="";edges.slice().sort((a,b)=>b.weight-a.weight).slice(0,5).forEach(e=>{const li=document.createElement("li");li.innerHTML="<span></span><span class=score></span>";li.firstChild.textContent=e.a+" — "+e.b;li.lastChild.textContent=e.weight;list.append(li);});if(!list.children.length)list.innerHTML="<li class=none>なし</li>";} function updateTools(){[addButton,connectButton,deleteButton,unpinButton].forEach(b=>b.disabled=!editMode);editButton.setAttribute("aria-pressed",editMode);connectButton.setAttribute("aria-pressed",connecting);unpinButton.disabled=!editMode||!selected||typeof selected!=="string"||!positions.has(selected);}
+            editButton.onclick=()=>{editMode=!editMode;connecting=false;connectFrom=null;selected=null;form.classList.remove("open");help.textContent=editMode?"ノード・線を選択して削除できます。ノードをドラッグすると固定します。":"編集を選ぶと、ノードの追加・接続・削除・ドラッグ固定ができます。";updateTools();draw();};addButton.onclick=()=>{form.classList.add("open");input.focus();};form.querySelector("[data-graph-cancel]").onclick=()=>form.classList.remove("open");form.onsubmit=e=>{e.preventDefault();const id=input.value.trim();if(!id||nodes.has(id)){help.textContent="空白でない、重複しない言葉を入力してください。";return;}edits.nodes.push({id});input.value="";form.classList.remove("open");mutate();};connectButton.onclick=()=>{connecting=!connecting;connectFrom=null;help.textContent=connecting?"接続する1つ目のノードを選択してください。":"接続を取り消しました。";updateTools();draw();};deleteButton.onclick=()=>{if(selected===null)return;if(typeof selected==="number"){const edge=edges[selected];if(edge.base)edits.hidden_edges=[...edits.hidden_edges,{a:edge.a,b:edge.b}];else edits.edges=edits.edges.filter(e=>key(e.a,e.b)!==key(edge.a,edge.b));}else{if((edits.nodes||[]).some(n=>n.id===selected))edits.nodes=edits.nodes.filter(n=>n.id!==selected);else edits.hidden_node_ids=[...new Set([...edits.hidden_node_ids,selected])];edits.edges=edits.edges.filter(e=>e.a!==selected&&e.b!==selected);edits.hidden_edges=edits.hidden_edges.filter(e=>e.a!==selected&&e.b!==selected);edits.positions=edits.positions.filter(p=>p.id!==selected);}selected=null;mutate();updateTools();};unpinButton.onclick=()=>{edits.positions=edits.positions.filter(p=>p.id!==selected);mutate();updateTools();};
+            canvas.addEventListener("pointerdown",e=>{if(!editMode)return;const p=point(e),id=hitNode(p);if(!id){selected=hitEdge(p);connecting=false;connectFrom=null;updateTools();draw();return;}if(connecting){if(!connectFrom){connectFrom=id;selected=id;help.textContent="接続する2つ目のノードを選択してください。";}else if(connectFrom===id||edges.some(edge=>key(edge.a,edge.b)===key(connectFrom,id))){help.textContent="自己接続・重複接続は追加できません。";}else{edits.edges.push({a:connectFrom,b:id});connecting=false;connectFrom=null;mutate();}updateTools();draw();return;}selected=id;dragging=id;canvas.setPointerCapture(e.pointerId);updateTools();draw();});canvas.addEventListener("pointermove",e=>{if(!dragging)return;const p=point(e),n=nodes.get(dragging);n.x=p.x;n.y=p.y;draw();});canvas.addEventListener("pointerup",()=>{if(!dragging)return;const {w,h}=size(),n=nodes.get(dragging);edits.positions=edits.positions.filter(p=>p.id!==dragging);edits.positions.push({id:dragging,x:Math.max(0,Math.min(1,n.x/w)),y:Math.max(0,Math.min(1,n.y/h))});dragging=null;mutate();updateTools();});document.addEventListener("keydown",e=>{if(e.key==="Escape"){connecting=false;connectFrom=null;form.classList.remove("open");updateTools();draw();}});window.addEventListener("resize",()=>{fit();merge();reheat();});fit();merge();requestAnimationFrame(renderPairs);updateTools();reheat();
         })();
         </script>
         {% else %}
@@ -581,8 +466,8 @@
         <p class="none">なし</p>
         {% endif %}
         <h2>強いつながり</h2>
-        {% if graph and graph.edges %}
-        <ul>
+            {% if graph %}
+            <ul data-strong-edges>
             {% for e in (graph.edges|sort(attribute='weight', reverse=true))[:5] %}
             <li><span><span data-word="{{ e.a }}">{{ e.a }}</span> — <span data-word="{{ e.b }}">{{ e.b }}</span></span><span class="score">{{ e.weight }}</span></li>
             {% endfor %}
@@ -607,6 +492,17 @@
     <div class="panel">
         <h2>議論の構造</h2>
         {% if structure and structure.statements %}
+        <script type="application/json" id="structure-edits-data">{{ structure_edits|tojson }}</script>
+        <div class="graph-toolbar" data-structure-toolbar>
+            <button type="button" data-structure-edit aria-pressed="false">編集</button>
+            <button type="button" data-structure-add disabled>＋ メモ</button>
+            <button type="button" data-structure-connect disabled aria-pressed="false">接続</button>
+            <button type="button" data-structure-delete disabled>削除</button>
+            <button type="button" data-structure-unpin disabled>固定解除</button>
+            <span class="graph-save-status" aria-live="polite">保存済み</span>
+        </div>
+        <form class="graph-node-form" data-structure-node-form><input maxlength="120" placeholder="メモを追加" aria-label="追加するメモ"><button>追加</button><button type="button" data-structure-cancel>取消</button></form>
+        <p class="graph-help" data-structure-help>編集を選ぶと、メモの追加・有向接続・削除・ドラッグ固定ができます。</p>
         <div id="structure-root"></div>
         <div id="structure-tooltip"></div>
         <ul class="structure-legend">
@@ -633,22 +529,32 @@
           const tooltip = document.getElementById("structure-tooltip");
           if (!dataEl || !root) return;
           const data = JSON.parse(dataEl.textContent);
-
-          const statements = data.statements || [];
-          const relations = data.relations || [];
-          const topics = data.topics || [];
-          const flows = Array.isArray(data.decision_flows) ? data.decision_flows : [];
+          let edits = JSON.parse(document.getElementById("structure-edits-data").textContent);
+          function composeStructure(base, overlay) {
+            const hiddenStatements = new Set(overlay.hidden_statement_ids || []);
+            const hiddenRelations = new Set(overlay.hidden_relation_ids || []);
+            const statements = [...(base.statements || []), ...(overlay.statements || []).map((s) => ({ ...s, utterance_index: null, speaker: "メモ", terms: [] }))].filter((s) => !hiddenStatements.has(s.id));
+            const ids = new Set(statements.map((s) => s.id));
+            const relations = [...(base.relations || []), ...(overlay.relations || [])].filter((r) => !hiddenRelations.has(r.id) && ids.has(r.source) && ids.has(r.target));
+            return { statements, relations, topics: base.topics || [], flows: Array.isArray(base.decision_flows) ? base.decision_flows : [] };
+          }
+          let composed = composeStructure(data, edits);
+          let statements = composed.statements;
+          let relations = composed.relations;
+          const topics = composed.topics;
+          const flows = composed.flows;
           const uttText = new Map((data.utterances || []).map((u) => [u.index, u.text]));
           const GRAY = "#8b949e";
           const color = (id) => (window.detailTopics && id ? window.detailTopics.color(id) : GRAY);
           const ink = () => getComputedStyle(document.body).color;
 
           // ---- indexing ----
-          const stmtById = new Map(statements.map((s) => [s.id, s]));
-          const stTopic = new Map();
-          topics.forEach((t) => (t.statement_ids || []).forEach((sid) => {
-            if (!stTopic.has(sid)) stTopic.set(sid, t.id);
-          }));
+          let stmtById, stTopic;
+          function reindex() {
+            stmtById = new Map(statements.map((s) => [s.id, s])); stTopic = new Map();
+            topics.forEach((t) => (t.statement_ids || []).forEach((sid) => { if (!stTopic.has(sid)) stTopic.set(sid, t.id); }));
+          }
+          reindex();
           const topicOf = (s) => stTopic.get(s.id) || s.topic_id || null;
           const idNum = (id) => { const m = /(\d+)/.exec(id || ""); return m ? parseInt(m[1], 10) : 0; };
           const uttIndexOf = (sid) => { const s = stmtById.get(sid); return s ? s.utterance_index : 1e9; };
@@ -707,7 +613,7 @@
           }
 
           // ---- tooltip ----
-          function stmtTip(sid) { return sid ? ("[" + speakerOf(sid) + "] " + fullText(sid)) : ""; }
+          function stmtTip(sid) { const s = stmtById.get(sid); return sid ? ("[" + speakerOf(sid) + "] " + fullText(sid) + (s && s.utterance_index == null ? "（抽出由来ではないメモ）" : "")) : ""; }
           function questionLines(q) {
             const lines = ["◆ 論点: " + (q.summary || summaryOf(q.statement_id))];
             if (q.statement_id) lines.push(stmtTip(q.statement_id));
@@ -1184,8 +1090,9 @@
               cl.members.forEach((s, i) => {
                 const ang = phase + i * 2.3999632; // golden angle spiral by time
                 const rad = 16 * Math.sqrt(i + 0.6) + rng() * 10;
+                const saved = opts && opts.positions && opts.positions.get(s.id);
                 nodes.set(s.id, {
-                  x: cl.ax + Math.cos(ang) * rad, y: cl.ay + Math.sin(ang) * rad,
+                  x: saved ? saved.x * width : cl.ax + Math.cos(ang) * rad, y: saved ? saved.y * height : cl.ay + Math.sin(ang) * rad,
                   vx: 0, vy: 0, cluster: cl, s,
                   r: 4.5 + Math.min(degree.get(s.id) || 0, 5) * 1.1,
                   lines: wrapLabel(s.text || "", LABEL_PX, LABEL_W, LABEL_LINES),
@@ -1233,6 +1140,7 @@
                 b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
               });
               list.forEach((n) => {
+                if (opts && opts.positions && opts.positions.has(n.s.id)) { n.vx = 0; n.vy = 0; return; }
                 n.vx += (n.cluster.ax - n.x) * 0.011;
                 n.vy += (n.cluster.ay - n.y) * 0.016;
                 n.vx *= 0.8; n.vy *= 0.8;
@@ -1401,7 +1309,7 @@
                 });
               }
             }
-            return { height, hit, draw };
+            return { height, hit, draw, nodes, edges };
           }
 
           const networkView = {
@@ -1469,11 +1377,11 @@
               buildSwitch(avail);
               redraw(null);
               if (!flow) note.textContent = "この話題に決定フローは検出されませんでした。ネットワーク表示しています。";
-              else note.textContent = scene.note || "";
+              else note.textContent = (edits.relations.length || edits.hidden_statement_ids.length || edits.hidden_relation_ids.length) ? "ネットワークへの編集があります。決定フローの意味付けは変更しません。" : (scene.note || "");
             }
             bindHover(canvas, () => scene, redraw);
             select(flow ? (savedView() || "rails") : "network");
-            window.addEventListener("resize", () => select(current ? current.id : (flow ? "rails" : "network")));
+            registerStructureResize(() => select(current ? current.id : (flow ? "rails" : "network")));
           }
 
           function renderPerTopic() {
@@ -1506,11 +1414,75 @@
             function render() { scene = networkScene(widthNow(), statements, relations, laneDefs); const ctx = fitCanvas(canvas, widthNow(), scene.height); scene.draw(ctx, null); }
             bindHover(canvas, () => scene, (hoverId) => { if (!scene) return; const ctx = fitCanvas(canvas, widthNow(), scene.height); scene.draw(ctx, hoverId); });
             render();
-            window.addEventListener("resize", render);
+            registerStructureResize(render);
           }
 
-          if (!flows.length) renderWholePanelNetwork();
-          else renderPerTopic();
+          let structureResizeHandlers = [];
+          let structureResizeBound = false;
+          let editorDirty = false;
+          let editorSaving = false;
+          let editorTimer = null;
+          function registerStructureResize(handler) {
+            structureResizeHandlers.push(handler);
+            if (!structureResizeBound) {
+              window.addEventListener("resize", () => structureResizeHandlers.forEach((fn) => fn()));
+              structureResizeBound = true;
+            }
+          }
+          function editorStatus(text, error) {
+            const status = document.querySelector("[data-structure-toolbar] .graph-save-status");
+            if (!status) return;
+            status.textContent = text;
+            status.className = error ? "graph-save-status error" : "graph-save-status";
+          }
+          function scheduleEditorSave() {
+            editorDirty = true;
+            editorStatus("未保存", false);
+            clearTimeout(editorTimer);
+            if (!editorSaving) editorTimer = setTimeout(saveStructureEdits, 450);
+          }
+          async function saveStructureEdits() {
+            if (editorSaving || !editorDirty) return;
+            editorSaving = true; editorDirty = false;
+            const sent = JSON.parse(JSON.stringify(edits));
+            editorStatus("保存中…", false);
+            try {
+              const response = await fetch({{ structure_edits_url|tojson }}, {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({revision:sent.revision,edits:Object.fromEntries(Object.entries(sent).filter(([key])=>key!=="revision"))})});
+              const body = await response.json();
+              if (response.status === 409) { editorStatus("競合しました。再読み込みして再試行してください。", true); return; }
+              if (!response.ok) throw Error(body.detail);
+              if (editorDirty) edits.revision = body.edits.revision;
+              else edits = body.edits;
+              editorStatus("保存済み", false);
+            } catch (_) {
+              editorDirty = true;
+              editorStatus("保存に失敗しました。再試行してください。", true);
+            } finally {
+              editorSaving = false;
+              if (editorDirty && !document.querySelector("[data-structure-toolbar] .graph-save-status")?.classList.contains("error")) scheduleEditorSave();
+            }
+          }
+          function renderEditor() {
+            const tools = document.querySelector("[data-structure-toolbar]"), form = document.querySelector("[data-structure-node-form]");
+            const editButton = tools.querySelector("[data-structure-edit]"), addButton = tools.querySelector("[data-structure-add]"), connectButton = tools.querySelector("[data-structure-connect]"), deleteButton = tools.querySelector("[data-structure-delete]"), unpinButton = tools.querySelector("[data-structure-unpin]"), status = tools.querySelector(".graph-save-status"), help = document.querySelector("[data-structure-help]"), input = form.querySelector("input");
+            const wrap = document.createElement("div"), canvas = document.createElement("canvas"); wrap.className = "df-canvas-wrap"; wrap.appendChild(canvas); root.appendChild(wrap);
+            const positions = new Map((edits.positions || []).map((p) => [p.id, p])); let scene, ctx, editMode = false, connecting = false, from = null, selected = null, dragging = null;
+            const lanes = () => { const items = topics.map((t) => ({ id:t.id, label:t.label, summary:t.summary || "" })); if (statements.some((s) => !topicOf(s))) items.push({id:null,label:"その他",summary:""}); return items.length ? items : [{id:null,label:"全体",summary:""}]; };
+            const width = () => canvas.clientWidth || wrap.clientWidth || root.clientWidth || 900;
+            function redraw() { scene = networkScene(width(), statements, relations, lanes(), { positions }); ctx = fitCanvas(canvas, width(), scene.height); scene.draw(ctx, null); }
+            function update() { [addButton,connectButton,deleteButton,unpinButton].forEach((b) => b.disabled = !editMode); editButton.setAttribute("aria-pressed", editMode); connectButton.setAttribute("aria-pressed", connecting); unpinButton.disabled = !editMode || !selected || !positions.has(selected); }
+            function schedule() { scheduleEditorSave(); }
+            function refresh() { composed = composeStructure(data, edits); statements = composed.statements; relations = composed.relations; reindex(); structureResizeHandlers = []; root.textContent=""; renderEditor(); if (flows.length) renderPerTopic(); else renderWholePanelNetwork(); }
+            const point = (event) => { const rect=canvas.getBoundingClientRect(); return {x:event.clientX-rect.left,y:event.clientY-rect.top}; };
+            const hitNode = (p) => { let id=null, best=Infinity; scene.nodes.forEach((n,key)=>{const d=Math.hypot(n.x-p.x,n.y-p.y);if(d<n.r+12&&d<best){id=key;best=d;}}); return id; };
+            const hitEdge = (p) => { let id=null, best=10; scene.edges.forEach((r)=>{const a=scene.nodes.get(r.source),b=scene.nodes.get(r.target);if(!a||!b)return;const dx=b.x-a.x,dy=b.y-a.y,d=dx*dx+dy*dy||1,t=Math.max(0,Math.min(1,((p.x-a.x)*dx+(p.y-a.y)*dy)/d)),dist=Math.hypot(p.x-(a.x+dx*t),p.y-(a.y+dy*t));if(dist<best){best=dist;id=r.id;}});return id; };
+            editButton.onclick=()=>{editMode=!editMode; connecting=false; from=null; update();}; addButton.onclick=()=>{form.classList.add("open");input.focus();}; form.querySelector("[data-structure-cancel]").onclick=()=>form.classList.remove("open"); form.onsubmit=(event)=>{event.preventDefault();const text=input.value.trim();if(!text)return;edits.statements.push({id:"u:"+Date.now().toString(36)+Math.random().toString(36).slice(2,8),text,topic_id:null});input.value="";form.classList.remove("open");schedule();refresh();};
+            connectButton.onclick=()=>{connecting=!connecting;from=null;help.textContent=connecting?"始点、終点の順にノードを選択してください。":"接続を取り消しました。";update();}; deleteButton.onclick=()=>{if(!selected)return;if(selected.startsWith("edge:")){const id=selected.slice(5);if((data.relations||[]).some((r)=>r.id===id))edits.hidden_relation_ids=[...new Set([...edits.hidden_relation_ids,id])];else edits.relations=edits.relations.filter((r)=>r.id!==id);}else{const baseStatement=(data.statements||[]).some((s)=>s.id===selected); if(baseStatement) edits.hidden_statement_ids=[...new Set([...edits.hidden_statement_ids,selected])]; else edits.statements=edits.statements.filter((s)=>s.id!==selected); edits.relations=edits.relations.filter((r)=>r.source!==selected&&r.target!==selected); edits.hidden_relation_ids=(edits.hidden_relation_ids||[]).filter((id)=>{const r=(data.relations||[]).find((item)=>item.id===id);return r&&r.source!==selected&&r.target!==selected;}); edits.positions=edits.positions.filter((p)=>p.id!==selected);}selected=null;schedule();refresh();}; unpinButton.onclick=()=>{edits.positions=edits.positions.filter((p)=>p.id!==selected);schedule();refresh();};
+            canvas.addEventListener("pointerdown",(event)=>{if(!editMode)return;const id=hitNode(point(event));if(!id){const edge=hitEdge(point(event));selected=edge?"edge:"+edge:null;update();return;}if(connecting){if(!from){from=id;selected=id;help.textContent="終点を選択してください。";}else if(from!==id&&!relations.some((r)=>r.source===from&&r.target===id)){edits.relations.push({id:"ur:"+Date.now().toString(36),source:from,target:id,type:"elaborates"});connecting=false;from=null;schedule();refresh();}return;}selected=id;dragging=id;canvas.setPointerCapture(event.pointerId);update();}); canvas.addEventListener("pointermove",(event)=>{if(!dragging)return;const p=point(event), n=scene.nodes.get(dragging);n.x=p.x;n.y=p.y;ctx.clearRect(0,0,width(),scene.height);scene.draw(ctx,null);}); canvas.addEventListener("pointerup",()=>{if(!dragging)return;const n=scene.nodes.get(dragging);edits.positions=edits.positions.filter((p)=>p.id!==dragging);edits.positions.push({id:dragging,x:Math.max(0,Math.min(1,n.x/width())),y:Math.max(0,Math.min(1,n.y/scene.height))});dragging=null;schedule();refresh();});
+            redraw(); update(); registerStructureResize(redraw);
+          }
+          renderEditor();
+          if (!flows.length) renderWholePanelNetwork(); else renderPerTopic();
         })();
         </script>
         {% else %}

@@ -1,23 +1,23 @@
-# Current Project: NSKETCH-732 — SSE realtime dashboard planning
+# Current Project: ADHOC — Editable discourse-structure network
 
 ## Goal
-- Plan a careful Server-Sent Events migration for the FastAPI Transcribe Dashboard, replacing normal 2-second polling with realtime updates.
+- Plan persistent statement/relation editing for the discourse-structure network, reusing the word-network edit foundation.
 
 ## Key files
 - `src/web/app.py`
-- `src/web/templates/index.html`
-- `src/web/templates/_jobs.html`
-- `src/status.py`
-- `src/worker.py`
+- `src/web/templates/detail.html`
+- `src/artifacts.py`
+- `tests/test_artifacts.py`
+- `tests/test_artifacts_structure.py`
+- `tests/test_web_app.py`
 
 ## Architecture
-- Native `EventSource` frontend.
-- FastAPI `StreamingResponse` endpoint at planned `GET /events`.
-- `StatusStore` remains the in-memory source of truth and gains publish/subscribe notification support.
-- Existing `/jobs` htmx partial remains as fallback/debug route.
+- Generated structure remains immutable; a revisioned statement/relation overlay is written atomically in its artifact.
+- FastAPI exposes a validated `PUT /jobs/{filename}/structure-edits` endpoint using the existing 64 KiB/revision/409 pattern.
+- All view models consume composed structure; network mutations rerun the existing bounded deterministic layout rather than adding a permanent rAF loop.
 
 ## Decisions
-- Avoid new dependencies for v1.
-- Preserve synchronous worker thread model.
-- Send fresh `snapshot` on every connection/reconnect instead of implementing event replay.
-- Use heartbeat and bounded subscriber queues to make long-lived streams robust.
+- Use explicit edit mode, directed two-click relation creation, visible deletion, and normalized drag pins.
+- Default user relations to `elaborates`; memo statements inherit the active topic and carry no transcript provenance.
+- Never derive option/argument/outcome semantics from an arbitrary user relation; Gate 1 controls non-network visualization.
+- Branch `feature/editable-structure-network` from `feature/editable-word-network`; add no dependencies.

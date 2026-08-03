@@ -23,10 +23,22 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .. import config, worker_state
-from ..artifacts import load_graph, load_keywords, load_structure
+from ..artifacts import (
+    GraphEditsError,
+    GraphRevisionConflict,
+    StructureEditsError,
+    StructureRevisionConflict,
+    graph_edits_body_too_large,
+    read_limited_graph_edits_payload,
+    load_graph,
+    load_keywords,
+    load_structure,
+    update_graph_edits,
+    update_structure_edits,
+)
 from ..live import moonshine_fetch
 from ..live.session import LiveSessionError, manager as live_manager
-from ..status import StoreEvent, store
+from ..status import JobState, StoreEvent, store
 from ..version import BACKEND_VERSION, PROTOCOL_VERSION
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -91,6 +103,14 @@ def _reject_traversal(filename: str) -> None:
     """404 any path-like filename before it reaches the filesystem (D6)."""
     if Path(filename).name != filename:
         raise HTTPException(status_code=404)
+
+
+async def _read_limited_graph_edits_body(request: Request) -> bytes:
+    """Read only up to the graph edit limit from a streamed request body."""
+    try:
+        return await read_limited_graph_edits_payload(request.stream())
+    except ValueError:
+        raise HTTPException(status_code=413, detail="edit request is too large") from None
 
 
 def format_sse(
@@ -298,9 +318,65 @@ def create_app(lifespan: LifespanFactory | None = None) -> FastAPI:
                 "text": text,
                 "keywords": keywords["keywords"] if keywords else None,
                 "graph": graph["graph"] if graph else None,
+                "graph_edits": graph["edits"] if graph else None,
+                "graph_edits_url": f"/jobs/{filename}/graph-edits",
                 "structure": structure,
+                "structure_edits": structure["edits"] if structure else None,
+                "structure_edits_url": f"/jobs/{filename}/structure-edits",
             },
         )
+
+    @app.put("/jobs/{filename}/graph-edits")
+    async def save_graph_edits(filename: str, request: Request):
+        _reject_traversal(filename)
+        if graph_edits_body_too_large(request.headers.get("content-length")):
+            raise HTTPException(status_code=413, detail="edit request is too large")
+        job = store.get(filename)
+        if job is None:
+            raise HTTPException(status_code=404)
+        if job.state != JobState.DONE:
+            raise HTTPException(status_code=409, detail="job is not complete")
+        raw_body = await _read_limited_graph_edits_body(request)
+        try:
+            body = json.loads(raw_body)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            raise HTTPException(status_code=400, detail="invalid JSON") from None
+        if not isinstance(body, dict) or set(body) != {"revision", "edits"}:
+            raise HTTPException(status_code=422, detail="invalid edit request")
+        try:
+            edits = update_graph_edits(
+                config.OUTPUT_DIR, Path(filename).stem, body["revision"], body["edits"]
+            )
+        except GraphRevisionConflict:
+            raise HTTPException(status_code=409, detail="edit revision conflict") from None
+        except GraphEditsError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+        return JSONResponse({"revision": edits["revision"], "edits": edits})
+
+    @app.put("/jobs/{filename}/structure-edits")
+    async def save_structure_edits(filename: str, request: Request):
+        _reject_traversal(filename)
+        if graph_edits_body_too_large(request.headers.get("content-length")):
+            raise HTTPException(status_code=413, detail="edit request is too large")
+        job = store.get(filename)
+        if job is None:
+            raise HTTPException(status_code=404)
+        if job.state != JobState.DONE:
+            raise HTTPException(status_code=409, detail="job is not complete")
+        raw_body = await _read_limited_graph_edits_body(request)
+        try:
+            body = json.loads(raw_body)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            raise HTTPException(status_code=400, detail="invalid JSON") from None
+        if not isinstance(body, dict) or set(body) != {"revision", "edits"}:
+            raise HTTPException(status_code=422, detail="invalid edit request")
+        try:
+            edits = update_structure_edits(config.OUTPUT_DIR, Path(filename).stem, body["revision"], body["edits"])
+        except StructureRevisionConflict:
+            raise HTTPException(status_code=409, detail="edit revision conflict") from None
+        except StructureEditsError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+        return JSONResponse({"revision": edits["revision"], "edits": edits})
 
     @app.get("/events")
     async def events(request: Request):

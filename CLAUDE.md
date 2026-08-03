@@ -1,18 +1,23 @@
-# Current Project: NSKETCH-885 — ASR-first batch transcription (whisperX-style)
+# Current Project: ADHOC — Editable discourse-structure network
 
 ## Goal
-- Batch pipeline: one whole-file whisper pass (word_timestamps=True, ja) + whole-file pyannote diarization; pure word→turn max-overlap assignment + same-speaker grouping (no-space join). Public contract (list[TranscriptSegment] + on_segment time order) unchanged.
+- Add persistent statement/relation editing to the detail page's discourse-structure network, stacked on the editable word-network branch.
 
 ## Key files
-- `src/align.py` — stdlib-only pure alignment: Word/Turn/TranscriptSegment, words_from_whisper_result, assign_words_to_turns.
-- `src/transcriber.py` — whole-file decode + diarization + alignment; re-exports TranscriptSegment; signature unchanged (audio_cropper unused).
-- `tests/test_align.py` — pure alignment matrix, no torch/GPU/audio.
+- `src/web/templates/detail.html`
+- `src/web/app.py`
+- `src/artifacts.py`
+- `tests/test_artifacts.py`
+- `tests/test_artifacts_structure.py`
+- `tests/test_web_app.py`
 
 ## Architecture
-- ASR-first (whisperX-style); assignment: max overlap → min gap → earliest turn; min_segment_seconds now drops short *turns* pre-assignment (words re-attach to neighbors).
-- worker.py / artifacts.py / formatter.py / discourse untouched; BATCH_WHISPER_MODE resolution (NSKETCH-883) untouched.
+- Keep generated statements, relations, topics, and decision flows immutable; store a revisioned overlay in the structure artifact.
+- Add a validated, atomic `PUT /jobs/{filename}/structure-edits` endpoint using the graph-edit security pattern.
+- Compose base + edits before building any view; rerun the bounded deterministic `networkScene` layout after mutations.
 
 ## Decisions
-- Word-level granularity; condition_on_previous_text=False default + BATCH_CONDITION_ON_PREVIOUS_TEXT knob.
-- on_segment emitted post-alignment in time order (no incremental emission).
-- NaN/inf words dropped, reversed timestamps clamped (never fail the job); empty diarization → SPEAKER_00.
+- User relations are directed (first click source, second target) and default to `elaborates`; memo statements inherit the edited topic.
+- Persist user statements/relations, hidden base IDs, and normalized pins; use revision/409 and atomic replacement.
+- Do not infer decision-flow semantics from arbitrary relations. Gate 1 decides whether non-network views only note edits or receive explicit relation overlays.
+- Create `feature/editable-structure-network` from `feature/editable-word-network`, not main; add no dependencies.
