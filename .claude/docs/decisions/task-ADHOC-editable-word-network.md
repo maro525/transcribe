@@ -4,7 +4,7 @@
 - linear_id: ADHOC
 - tier: M
 - created: 2026-08-02
-- status: planned (auto-approved; implementation pending)
+- status: done
 
 ## Brief
 
@@ -286,4 +286,27 @@
 - minor の既存申し送り（実ブラウザ/HTTP integration、圧縮された editor JS の可読性、公開時の認証前提確認）は deploy 時に継続する。
 
 ## Deploy
-<!-- deploy が記入 -->
+
+### デプロイ結果: SUCCESS
+
+### 実行内容
+- デプロイ日時: 2026-08-03T11:16:19+09:00
+- feature ブランチ: `feature/editable-word-network`
+- コミット: `bec5bbe` (`feat(web): add editable word network map`)
+- PR: https://github.com/maro525/transcribe/pull/18
+
+### デプロイ後検証結果
+
+#### スモークテスト
+- `python3 tests/test_artifacts.py` — 12/12 passed
+- `python3 tests/test_web_app.py` — 7/7 passed
+- `python3 -m compileall -q src` — passed
+- `git diff --check` — passed
+
+### 申し送り事項
+- team-review 最終判定は PASS。B1〜B5 はすべて解消済み。
+- FastAPI を含む正規環境で、ブラウザ操作・HTTP status・409・オフライン状態を確認すること。
+- 公開ネットワークへ露出する場合は、既存の無認証 trust model を再確認すること。
+
+### Decision Log 追記
+- [deploy] POST 2026-08-03: PR #18 を作成し、feature ブランチを push。検証は artifacts 12/12、web 7/7、compileall、diff check がすべて成功。Linear ID `ADHOC` は明示指示により更新をスキップ。
