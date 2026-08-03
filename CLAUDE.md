@@ -1,18 +1,21 @@
-# Current Project: NSKETCH-885 — ASR-first batch transcription (whisperX-style)
+# Current Project: ADHOC — Editable word network planning
 
 ## Goal
-- Batch pipeline: one whole-file whisper pass (word_timestamps=True, ja) + whole-file pyannote diarization; pure word→turn max-overlap assignment + same-speaker grouping (no-space join). Public contract (list[TranscriptSegment] + on_segment time order) unchanged.
+- Make the detail page's word-network canvas editable after batch completion, with persistent node/edge edits and pinned positions.
 
 ## Key files
-- `src/align.py` — stdlib-only pure alignment: Word/Turn/TranscriptSegment, words_from_whisper_result, assign_words_to_turns.
-- `src/transcriber.py` — whole-file decode + diarization + alignment; re-exports TranscriptSegment; signature unchanged (audio_cropper unused).
-- `tests/test_align.py` — pure alignment matrix, no torch/GPU/audio.
+- `src/web/templates/detail.html`
+- `src/web/app.py`
+- `src/artifacts.py`
+- `tests/test_artifacts.py`
+- `tests/test_web_app.py` (planned)
 
 ## Architecture
-- ASR-first (whisperX-style); assignment: max overlap → min gap → earliest turn; min_segment_seconds now drops short *turns* pre-assignment (words re-attach to neighbors).
-- worker.py / artifacts.py / formatter.py / discourse untouched; BATCH_WHISPER_MODE resolution (NSKETCH-883) untouched.
+- Keep the generated `CooccurrenceGraph.snapshot()` as an immutable base and store an optional, revisioned edit overlay in the existing graph artifact.
+- Add a validated, atomic `PUT /jobs/{filename}/graph-edits` endpoint.
+- Merge base + edits in the existing dependency-free Canvas renderer and reheat the force simulation after mutations.
 
 ## Decisions
-- Word-level granularity; condition_on_previous_text=False default + BATCH_CONDITION_ON_PREVIOUS_TEXT knob.
-- on_segment emitted post-alignment in time order (no incremental emission).
-- NaN/inf words dropped, reversed timestamps clamped (never fail the job); empty diarization → SPEAKER_00.
+- Explicit edit mode; two-click edge creation; drag pins a node; visible controls handle deletion and unpinning.
+- Persist user nodes/edges, hidden base elements, and normalized pinned positions; detect concurrent edits with a revision and return 409.
+- No new dependencies and no changes to live graph, topic treemap, or decision-flow network.

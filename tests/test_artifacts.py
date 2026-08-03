@@ -112,6 +112,76 @@ def test_load_wrong_payload_key_returns_none():
         assert artifacts.load_keywords(out, "x") is None
 
 
+def _graph_envelope():
+    return {
+        "version": 1,
+        "graph": {
+            "type": "graph", "seq": 4,
+            "nodes": [{"id": "alpha", "weight": 2}, {"id": "beta", "weight": 1}],
+            "edges": [{"a": "alpha", "b": "beta", "weight": 2}],
+        },
+    }
+
+
+def test_legacy_graph_gets_empty_edit_overlay():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "meeting.graph.json"
+        path.write_text(json.dumps(_graph_envelope()), encoding="utf-8")
+        graph = artifacts.load_graph(Path(tmp), "meeting")
+    assert graph is not None
+    assert graph["edits"] == artifacts.empty_graph_edits()
+
+
+def test_graph_edits_roundtrip_canonical_and_preserves_base():
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp)
+        original = _graph_envelope()
+        (out / "meeting.graph.json").write_text(json.dumps(original), encoding="utf-8")
+        saved = artifacts.update_graph_edits(out, "meeting", 0, {
+            "nodes": [{"id": "extra"}],
+            "edges": [{"a": "extra", "b": "alpha"}],
+            "hidden_node_ids": [], "hidden_edges": [],
+            "positions": [{"id": "extra", "x": 0.2, "y": 0.8}],
+        })
+        loaded = artifacts.load_graph(out, "meeting")
+    assert saved["revision"] == 1
+    assert saved["edges"] == [{"a": "alpha", "b": "extra"}]
+    assert loaded is not None and loaded["graph"] == original["graph"]
+    assert loaded["edits"] == saved
+
+
+def test_graph_edits_reject_invalid_references_limits_and_coordinates():
+    graph = _graph_envelope()["graph"]
+    invalid = [
+        {"nodes": [], "edges": [{"a": "alpha", "b": "missing"}], "hidden_node_ids": [], "hidden_edges": [], "positions": []},
+        {"nodes": [], "edges": [], "hidden_node_ids": ["missing"], "hidden_edges": [], "positions": []},
+        {"nodes": [], "edges": [], "hidden_node_ids": [], "hidden_edges": [], "positions": [{"id": "alpha", "x": 1.1, "y": 0}]},
+        {"nodes": [{"id": str(i)} for i in range(artifacts.MAX_EDIT_NODES + 1)], "edges": [], "hidden_node_ids": [], "hidden_edges": [], "positions": []},
+    ]
+    for edits in invalid:
+        try:
+            artifacts.normalize_graph_edits(edits, graph)
+        except artifacts.GraphEditsError:
+            continue
+        assert False, edits
+
+
+def test_graph_edits_detect_revision_conflict_and_corruption_fails_closed():
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp)
+        path = out / "meeting.graph.json"
+        path.write_text(json.dumps(_graph_envelope()), encoding="utf-8")
+        artifacts.update_graph_edits(out, "meeting", 0, {"nodes": [], "edges": [], "hidden_node_ids": [], "hidden_edges": [], "positions": []})
+        try:
+            artifacts.update_graph_edits(out, "meeting", 0, {"nodes": [], "edges": [], "hidden_node_ids": [], "hidden_edges": [], "positions": []})
+        except artifacts.GraphRevisionConflict:
+            pass
+        else:
+            assert False
+        path.write_text("{ broken", encoding="utf-8")
+        assert artifacts.load_graph(out, "meeting") is None
+
+
 if __name__ == "__main__":
     from _runner import run_module
 
