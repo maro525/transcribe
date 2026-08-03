@@ -4,7 +4,7 @@
 - linear_id: ADHOC
 - tier: M
 - created: 2026-08-02
-- status: planning
+- status: done
 
 ## Brief
 
@@ -62,6 +62,7 @@
 - [team-implement] POST 2026-08-03: Gate 1 A に従い structure overlay/API/network editor を実装。非-network views は composed structure の hidden reference を fail-soft に扱い、任意 relation から decision-flow semantics は導出しない。Linear ID `ADHOC` は MCP で issue 解決できずコメント投稿は失敗。
 - [team-review] POST 2026-08-03: tier=M（Quality + Security）レビューを実施し FAIL。保存中の mutation が先行 PUT 応答で失われる競合と、refresh ごとに旧 save timer / resize listener が残る問題を blocker と判定。direct tests 27/27、compileall、JS syntax、diff check は通過。FastAPI 不在のためブラウザ実機確認は未実施。Linear ID `ADHOC` は MCP で issue 解決できず開始・結果コメント投稿は失敗。
 - [team-review] POST 2026-08-03: blocker 再レビューを実施し PASS。RB1 は render lifecycle 外の単一 save coordinator と dirty 時の revision-only 継承により後続 mutation を保持、RB2 は単一 timer と resize dispatcher の handler 差替えにより listener 増加を解消したことを確認。direct tests 28/28、compileall、JS syntax、diff check、追加 structural check は通過。Linear ID `ADHOC` は MCP で issue 解決できず開始・結果コメント投稿は失敗。
+- [deploy] POST 2026-08-03: feature/editable-structure-network を push し、feature/editable-word-network を base とする stacked PR #19 を作成。#18 マージ後に main へ retarget する。Linear ID `ADHOC` のため Linear 更新はスキップ。
 
 ## Design
 
@@ -211,4 +212,28 @@
 - Linear `ADHOC` は issue として解決できず、再レビュー開始・結果コメントは MCP 400 のため投稿不能。
 
 ## Deploy
-<!-- deploy が記入 -->
+
+### デプロイ結果: SUCCESS
+
+### 実行内容
+- デプロイ日時: 2026-08-03T22:46:52+09:00
+- feature ブランチ: `feature/editable-structure-network`
+- コミット: `d575f35 feat(web): enable editable structure network`
+- PR: https://github.com/maro525/transcribe/pull/19
+- stacked PR の base: `feature/editable-word-network`（#18 マージ後に `main` へ retarget）
+
+### デプロイ後検証結果
+
+#### ブラウザ確認
+- FastAPI が環境にないため未実施（`ModuleNotFoundError: fastapi`）。
+
+#### スモークテスト
+- `python3 tests/test_artifacts.py` — 12/12 pass
+- `python3 tests/test_artifacts_structure.py` — 8/8 pass
+- `python3 tests/test_web_app.py` — 8/8 pass
+- `python3 -m compileall -q src`、structure editor の `node --check`、`git diff --check` — pass
+
+### 申し送り事項
+- team-review は PASS。RB1（保存競合）と RB2（resize listener leak）は解消済み。
+- memo-only 時の Gate 1 A 注記、および validator/API の境界テスト拡充は minor のフォローアップ候補。
+- `src-tauri/` は無関係の未追跡ディレクトリのためコミット対象外。
