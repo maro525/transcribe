@@ -494,6 +494,17 @@
     <div class="panel">
         <h2>議論の構造</h2>
         {% if structure and structure.statements %}
+        <script type="application/json" id="structure-edits-data">{{ structure_edits|tojson }}</script>
+        <div class="graph-toolbar" data-structure-toolbar>
+            <button type="button" data-structure-edit aria-pressed="false">編集</button>
+            <button type="button" data-structure-add disabled>＋ メモ</button>
+            <button type="button" data-structure-connect disabled aria-pressed="false">接続</button>
+            <button type="button" data-structure-delete disabled>削除</button>
+            <button type="button" data-structure-unpin disabled>固定解除</button>
+            <span class="graph-save-status" aria-live="polite">保存済み</span>
+        </div>
+        <form class="graph-node-form" data-structure-node-form><input maxlength="120" placeholder="メモを追加" aria-label="追加するメモ"><button>追加</button><button type="button" data-structure-cancel>取消</button></form>
+        <p class="graph-help" data-structure-help>編集を選ぶと、メモの追加・有向接続・削除・ドラッグ固定ができます。</p>
         <div id="structure-root"></div>
         <div id="structure-tooltip"></div>
         <ul class="structure-legend">
@@ -520,22 +531,32 @@
           const tooltip = document.getElementById("structure-tooltip");
           if (!dataEl || !root) return;
           const data = JSON.parse(dataEl.textContent);
-
-          const statements = data.statements || [];
-          const relations = data.relations || [];
-          const topics = data.topics || [];
-          const flows = Array.isArray(data.decision_flows) ? data.decision_flows : [];
+          let edits = JSON.parse(document.getElementById("structure-edits-data").textContent);
+          function composeStructure(base, overlay) {
+            const hiddenStatements = new Set(overlay.hidden_statement_ids || []);
+            const hiddenRelations = new Set(overlay.hidden_relation_ids || []);
+            const statements = [...(base.statements || []), ...(overlay.statements || []).map((s) => ({ ...s, utterance_index: null, speaker: "メモ", terms: [] }))].filter((s) => !hiddenStatements.has(s.id));
+            const ids = new Set(statements.map((s) => s.id));
+            const relations = [...(base.relations || []), ...(overlay.relations || [])].filter((r) => !hiddenRelations.has(r.id) && ids.has(r.source) && ids.has(r.target));
+            return { statements, relations, topics: base.topics || [], flows: Array.isArray(base.decision_flows) ? base.decision_flows : [] };
+          }
+          let composed = composeStructure(data, edits);
+          let statements = composed.statements;
+          let relations = composed.relations;
+          const topics = composed.topics;
+          const flows = composed.flows;
           const uttText = new Map((data.utterances || []).map((u) => [u.index, u.text]));
           const GRAY = "#8b949e";
           const color = (id) => (window.detailTopics && id ? window.detailTopics.color(id) : GRAY);
           const ink = () => getComputedStyle(document.body).color;
 
           // ---- indexing ----
-          const stmtById = new Map(statements.map((s) => [s.id, s]));
-          const stTopic = new Map();
-          topics.forEach((t) => (t.statement_ids || []).forEach((sid) => {
-            if (!stTopic.has(sid)) stTopic.set(sid, t.id);
-          }));
+          let stmtById, stTopic;
+          function reindex() {
+            stmtById = new Map(statements.map((s) => [s.id, s])); stTopic = new Map();
+            topics.forEach((t) => (t.statement_ids || []).forEach((sid) => { if (!stTopic.has(sid)) stTopic.set(sid, t.id); }));
+          }
+          reindex();
           const topicOf = (s) => stTopic.get(s.id) || s.topic_id || null;
           const idNum = (id) => { const m = /(\d+)/.exec(id || ""); return m ? parseInt(m[1], 10) : 0; };
           const uttIndexOf = (sid) => { const s = stmtById.get(sid); return s ? s.utterance_index : 1e9; };
@@ -594,7 +615,7 @@
           }
 
           // ---- tooltip ----
-          function stmtTip(sid) { return sid ? ("[" + speakerOf(sid) + "] " + fullText(sid)) : ""; }
+          function stmtTip(sid) { const s = stmtById.get(sid); return sid ? ("[" + speakerOf(sid) + "] " + fullText(sid) + (s && s.utterance_index == null ? "（抽出由来ではないメモ）" : "")) : ""; }
           function questionLines(q) {
             const lines = ["◆ 論点: " + (q.summary || summaryOf(q.statement_id))];
             if (q.statement_id) lines.push(stmtTip(q.statement_id));
@@ -1071,8 +1092,9 @@
               cl.members.forEach((s, i) => {
                 const ang = phase + i * 2.3999632; // golden angle spiral by time
                 const rad = 16 * Math.sqrt(i + 0.6) + rng() * 10;
+                const saved = opts && opts.positions && opts.positions.get(s.id);
                 nodes.set(s.id, {
-                  x: cl.ax + Math.cos(ang) * rad, y: cl.ay + Math.sin(ang) * rad,
+                  x: saved ? saved.x * width : cl.ax + Math.cos(ang) * rad, y: saved ? saved.y * height : cl.ay + Math.sin(ang) * rad,
                   vx: 0, vy: 0, cluster: cl, s,
                   r: 4.5 + Math.min(degree.get(s.id) || 0, 5) * 1.1,
                   lines: wrapLabel(s.text || "", LABEL_PX, LABEL_W, LABEL_LINES),
@@ -1120,6 +1142,7 @@
                 b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
               });
               list.forEach((n) => {
+                if (opts && opts.positions && opts.positions.has(n.s.id)) { n.vx = 0; n.vy = 0; return; }
                 n.vx += (n.cluster.ax - n.x) * 0.011;
                 n.vy += (n.cluster.ay - n.y) * 0.016;
                 n.vx *= 0.8; n.vy *= 0.8;
@@ -1288,7 +1311,7 @@
                 });
               }
             }
-            return { height, hit, draw };
+            return { height, hit, draw, nodes, edges };
           }
 
           const networkView = {
@@ -1356,11 +1379,11 @@
               buildSwitch(avail);
               redraw(null);
               if (!flow) note.textContent = "この話題に決定フローは検出されませんでした。ネットワーク表示しています。";
-              else note.textContent = scene.note || "";
+              else note.textContent = (edits.relations.length || edits.hidden_statement_ids.length || edits.hidden_relation_ids.length) ? "ネットワークへの編集があります。決定フローの意味付けは変更しません。" : (scene.note || "");
             }
             bindHover(canvas, () => scene, redraw);
             select(flow ? (savedView() || "rails") : "network");
-            window.addEventListener("resize", () => select(current ? current.id : (flow ? "rails" : "network")));
+            registerStructureResize(() => select(current ? current.id : (flow ? "rails" : "network")));
           }
 
           function renderPerTopic() {
@@ -1393,11 +1416,75 @@
             function render() { scene = networkScene(widthNow(), statements, relations, laneDefs); const ctx = fitCanvas(canvas, widthNow(), scene.height); scene.draw(ctx, null); }
             bindHover(canvas, () => scene, (hoverId) => { if (!scene) return; const ctx = fitCanvas(canvas, widthNow(), scene.height); scene.draw(ctx, hoverId); });
             render();
-            window.addEventListener("resize", render);
+            registerStructureResize(render);
           }
 
-          if (!flows.length) renderWholePanelNetwork();
-          else renderPerTopic();
+          let structureResizeHandlers = [];
+          let structureResizeBound = false;
+          let editorDirty = false;
+          let editorSaving = false;
+          let editorTimer = null;
+          function registerStructureResize(handler) {
+            structureResizeHandlers.push(handler);
+            if (!structureResizeBound) {
+              window.addEventListener("resize", () => structureResizeHandlers.forEach((fn) => fn()));
+              structureResizeBound = true;
+            }
+          }
+          function editorStatus(text, error) {
+            const status = document.querySelector("[data-structure-toolbar] .graph-save-status");
+            if (!status) return;
+            status.textContent = text;
+            status.className = error ? "graph-save-status error" : "graph-save-status";
+          }
+          function scheduleEditorSave() {
+            editorDirty = true;
+            editorStatus("未保存", false);
+            clearTimeout(editorTimer);
+            if (!editorSaving) editorTimer = setTimeout(saveStructureEdits, 450);
+          }
+          async function saveStructureEdits() {
+            if (editorSaving || !editorDirty) return;
+            editorSaving = true; editorDirty = false;
+            const sent = JSON.parse(JSON.stringify(edits));
+            editorStatus("保存中…", false);
+            try {
+              const response = await fetch({{ structure_edits_url|tojson }}, {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({revision:sent.revision,edits:Object.fromEntries(Object.entries(sent).filter(([key])=>key!=="revision"))})});
+              const body = await response.json();
+              if (response.status === 409) { editorStatus("競合しました。再読み込みして再試行してください。", true); return; }
+              if (!response.ok) throw Error(body.detail);
+              if (editorDirty) edits.revision = body.edits.revision;
+              else edits = body.edits;
+              editorStatus("保存済み", false);
+            } catch (_) {
+              editorDirty = true;
+              editorStatus("保存に失敗しました。再試行してください。", true);
+            } finally {
+              editorSaving = false;
+              if (editorDirty && !document.querySelector("[data-structure-toolbar] .graph-save-status")?.classList.contains("error")) scheduleEditorSave();
+            }
+          }
+          function renderEditor() {
+            const tools = document.querySelector("[data-structure-toolbar]"), form = document.querySelector("[data-structure-node-form]");
+            const editButton = tools.querySelector("[data-structure-edit]"), addButton = tools.querySelector("[data-structure-add]"), connectButton = tools.querySelector("[data-structure-connect]"), deleteButton = tools.querySelector("[data-structure-delete]"), unpinButton = tools.querySelector("[data-structure-unpin]"), status = tools.querySelector(".graph-save-status"), help = document.querySelector("[data-structure-help]"), input = form.querySelector("input");
+            const wrap = document.createElement("div"), canvas = document.createElement("canvas"); wrap.className = "df-canvas-wrap"; wrap.appendChild(canvas); root.appendChild(wrap);
+            const positions = new Map((edits.positions || []).map((p) => [p.id, p])); let scene, ctx, editMode = false, connecting = false, from = null, selected = null, dragging = null;
+            const lanes = () => { const items = topics.map((t) => ({ id:t.id, label:t.label, summary:t.summary || "" })); if (statements.some((s) => !topicOf(s))) items.push({id:null,label:"その他",summary:""}); return items.length ? items : [{id:null,label:"全体",summary:""}]; };
+            const width = () => canvas.clientWidth || wrap.clientWidth || root.clientWidth || 900;
+            function redraw() { scene = networkScene(width(), statements, relations, lanes(), { positions }); ctx = fitCanvas(canvas, width(), scene.height); scene.draw(ctx, null); }
+            function update() { [addButton,connectButton,deleteButton,unpinButton].forEach((b) => b.disabled = !editMode); editButton.setAttribute("aria-pressed", editMode); connectButton.setAttribute("aria-pressed", connecting); unpinButton.disabled = !editMode || !selected || !positions.has(selected); }
+            function schedule() { scheduleEditorSave(); }
+            function refresh() { composed = composeStructure(data, edits); statements = composed.statements; relations = composed.relations; reindex(); structureResizeHandlers = []; root.textContent=""; renderEditor(); if (flows.length) renderPerTopic(); else renderWholePanelNetwork(); }
+            const point = (event) => { const rect=canvas.getBoundingClientRect(); return {x:event.clientX-rect.left,y:event.clientY-rect.top}; };
+            const hitNode = (p) => { let id=null, best=Infinity; scene.nodes.forEach((n,key)=>{const d=Math.hypot(n.x-p.x,n.y-p.y);if(d<n.r+12&&d<best){id=key;best=d;}}); return id; };
+            const hitEdge = (p) => { let id=null, best=10; scene.edges.forEach((r)=>{const a=scene.nodes.get(r.source),b=scene.nodes.get(r.target);if(!a||!b)return;const dx=b.x-a.x,dy=b.y-a.y,d=dx*dx+dy*dy||1,t=Math.max(0,Math.min(1,((p.x-a.x)*dx+(p.y-a.y)*dy)/d)),dist=Math.hypot(p.x-(a.x+dx*t),p.y-(a.y+dy*t));if(dist<best){best=dist;id=r.id;}});return id; };
+            editButton.onclick=()=>{editMode=!editMode; connecting=false; from=null; update();}; addButton.onclick=()=>{form.classList.add("open");input.focus();}; form.querySelector("[data-structure-cancel]").onclick=()=>form.classList.remove("open"); form.onsubmit=(event)=>{event.preventDefault();const text=input.value.trim();if(!text)return;edits.statements.push({id:"u:"+Date.now().toString(36)+Math.random().toString(36).slice(2,8),text,topic_id:null});input.value="";form.classList.remove("open");schedule();refresh();};
+            connectButton.onclick=()=>{connecting=!connecting;from=null;help.textContent=connecting?"始点、終点の順にノードを選択してください。":"接続を取り消しました。";update();}; deleteButton.onclick=()=>{if(!selected)return;if(selected.startsWith("edge:")){const id=selected.slice(5);if((data.relations||[]).some((r)=>r.id===id))edits.hidden_relation_ids=[...new Set([...edits.hidden_relation_ids,id])];else edits.relations=edits.relations.filter((r)=>r.id!==id);}else{const baseStatement=(data.statements||[]).some((s)=>s.id===selected); if(baseStatement) edits.hidden_statement_ids=[...new Set([...edits.hidden_statement_ids,selected])]; else edits.statements=edits.statements.filter((s)=>s.id!==selected); edits.relations=edits.relations.filter((r)=>r.source!==selected&&r.target!==selected); edits.hidden_relation_ids=(edits.hidden_relation_ids||[]).filter((id)=>{const r=(data.relations||[]).find((item)=>item.id===id);return r&&r.source!==selected&&r.target!==selected;}); edits.positions=edits.positions.filter((p)=>p.id!==selected);}selected=null;schedule();refresh();}; unpinButton.onclick=()=>{edits.positions=edits.positions.filter((p)=>p.id!==selected);schedule();refresh();};
+            canvas.addEventListener("pointerdown",(event)=>{if(!editMode)return;const id=hitNode(point(event));if(!id){const edge=hitEdge(point(event));selected=edge?"edge:"+edge:null;update();return;}if(connecting){if(!from){from=id;selected=id;help.textContent="終点を選択してください。";}else if(from!==id&&!relations.some((r)=>r.source===from&&r.target===id)){edits.relations.push({id:"ur:"+Date.now().toString(36),source:from,target:id,type:"elaborates"});connecting=false;from=null;schedule();refresh();}return;}selected=id;dragging=id;canvas.setPointerCapture(event.pointerId);update();}); canvas.addEventListener("pointermove",(event)=>{if(!dragging)return;const p=point(event), n=scene.nodes.get(dragging);n.x=p.x;n.y=p.y;ctx.clearRect(0,0,width(),scene.height);scene.draw(ctx,null);}); canvas.addEventListener("pointerup",()=>{if(!dragging)return;const n=scene.nodes.get(dragging);edits.positions=edits.positions.filter((p)=>p.id!==dragging);edits.positions.push({id:dragging,x:Math.max(0,Math.min(1,n.x/width())),y:Math.max(0,Math.min(1,n.y/scene.height))});dragging=null;schedule();refresh();});
+            redraw(); update(); registerStructureResize(redraw);
+          }
+          renderEditor();
+          if (!flows.length) renderWholePanelNetwork(); else renderPerTopic();
         })();
         </script>
         {% else %}

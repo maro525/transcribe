@@ -113,6 +113,15 @@ def test_hidden_edge_is_removed_with_its_hidden_endpoint():
     assert saved["hidden_edges"] == []
 
 
+def test_structure_editor_uses_single_save_coordinator_and_resize_dispatcher():
+    """Regression guard for refresh-time save races and listener leaks."""
+    template = (Path(__file__).resolve().parents[1] / "src/web/templates/detail.html").read_text(encoding="utf-8")
+    assert "let editorTimer = null;" in template
+    assert "if (editorDirty) edits.revision = body.edits.revision;" in template
+    assert "structureResizeHandlers = []; root.textContent=\"\";" in template
+    assert "registerStructureResize(redraw);" in template
+
+
 if __name__ == "__main__":
     from _runner import run_module
     run_module(globals())

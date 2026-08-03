@@ -21,12 +21,15 @@ from .. import config
 from ..artifacts import (
     GraphEditsError,
     GraphRevisionConflict,
+    StructureEditsError,
+    StructureRevisionConflict,
     graph_edits_body_too_large,
     read_limited_graph_edits_payload,
     load_graph,
     load_keywords,
     load_structure,
     update_graph_edits,
+    update_structure_edits,
 )
 from ..live.session import LiveSessionError, manager as live_manager
 from ..status import JobState, StoreEvent, store
@@ -178,6 +181,8 @@ def create_app(lifespan: LifespanFactory | None = None) -> FastAPI:
                 "graph_edits": graph["edits"] if graph else None,
                 "graph_edits_url": f"/jobs/{filename}/graph-edits",
                 "structure": structure,
+                "structure_edits": structure["edits"] if structure else None,
+                "structure_edits_url": f"/jobs/{filename}/structure-edits",
             },
         )
 
@@ -205,6 +210,31 @@ def create_app(lifespan: LifespanFactory | None = None) -> FastAPI:
         except GraphRevisionConflict:
             raise HTTPException(status_code=409, detail="edit revision conflict") from None
         except GraphEditsError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+        return JSONResponse({"revision": edits["revision"], "edits": edits})
+
+    @app.put("/jobs/{filename}/structure-edits")
+    async def save_structure_edits(filename: str, request: Request):
+        _reject_traversal(filename)
+        if graph_edits_body_too_large(request.headers.get("content-length")):
+            raise HTTPException(status_code=413, detail="edit request is too large")
+        job = store.get(filename)
+        if job is None:
+            raise HTTPException(status_code=404)
+        if job.state != JobState.DONE:
+            raise HTTPException(status_code=409, detail="job is not complete")
+        raw_body = await _read_limited_graph_edits_body(request)
+        try:
+            body = json.loads(raw_body)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            raise HTTPException(status_code=400, detail="invalid JSON") from None
+        if not isinstance(body, dict) or set(body) != {"revision", "edits"}:
+            raise HTTPException(status_code=422, detail="invalid edit request")
+        try:
+            edits = update_structure_edits(config.OUTPUT_DIR, Path(filename).stem, body["revision"], body["edits"])
+        except StructureRevisionConflict:
+            raise HTTPException(status_code=409, detail="edit revision conflict") from None
+        except StructureEditsError as error:
             raise HTTPException(status_code=422, detail=str(error)) from None
         return JSONResponse({"revision": edits["revision"], "edits": edits})
 

@@ -52,6 +52,8 @@ MAX_HIDDEN_ITEMS = 250
 MAX_NODE_ID_LENGTH = 120
 MAX_GRAPH_EDITS_REQUEST_BYTES = 64 * 1024
 _GRAPH_EDIT_LOCK = Lock()
+_STRUCTURE_EDIT_LOCK = Lock()
+STRUCTURE_RELATION_TYPES = {"supports", "causes", "elaborates", "contrasts"}
 
 
 class GraphEditsError(ValueError):
@@ -60,6 +62,14 @@ class GraphEditsError(ValueError):
 
 class GraphRevisionConflict(GraphEditsError):
     """The submitted edit revision is no longer current."""
+
+
+class StructureEditsError(GraphEditsError):
+    """A structure edit overlay is malformed or cannot be applied."""
+
+
+class StructureRevisionConflict(StructureEditsError):
+    """The submitted structure edit revision is no longer current."""
 
 
 def graph_edits_body_too_large(content_length: str | None) -> bool:
@@ -258,7 +268,126 @@ def load_structure(output_dir: Path, stem: str) -> dict[str, Any] | None:
         return None
     if "statements" not in data or "relations" not in data:
         return None
+    try:
+        data["edits"] = normalize_structure_edits(data.get("edits"), data)
+    except StructureEditsError:
+        return None
     return data
+
+
+def empty_structure_edits() -> dict[str, Any]:
+    """Return the canonical no-op overlay for legacy structure artifacts."""
+    return {"revision": 0, "statements": [], "relations": [], "hidden_statement_ids": [], "hidden_relation_ids": [], "positions": []}
+
+
+def _structure_id(value: Any) -> str:
+    try:
+        identifier = _valid_id(value)
+    except GraphEditsError as error:
+        raise StructureEditsError(str(error)) from None
+    if any(ord(char) < 32 or ord(char) == 127 for char in identifier):
+        raise StructureEditsError("invalid id")
+    return identifier
+
+
+def normalize_structure_edits(edits: Any, structure: dict[str, Any]) -> dict[str, Any]:
+    """Validate a directed, typed structure overlay without changing its base."""
+    if edits is None:
+        return empty_structure_edits()
+    allowed = {"revision", "statements", "relations", "hidden_statement_ids", "hidden_relation_ids", "positions"}
+    if not isinstance(edits, dict) or set(edits) - allowed:
+        raise StructureEditsError("invalid edits object")
+    revision = edits.get("revision", 0)
+    if type(revision) is not int or revision < 0:
+        raise StructureEditsError("invalid revision")
+    base_statements = structure.get("statements")
+    base_relations = structure.get("relations")
+    if not isinstance(base_statements, list) or not isinstance(base_relations, list):
+        raise StructureEditsError("invalid base structure")
+    base_ids = {_structure_id(item.get("id")) for item in base_statements if isinstance(item, dict)}
+    if len(base_ids) != len(base_statements):
+        raise StructureEditsError("invalid base statement")
+    base_relation_ids: set[str] = set()
+    base_relation_keys: set[tuple[str, str, str]] = set()
+    for item in base_relations:
+        if not isinstance(item, dict):
+            raise StructureEditsError("invalid base relation")
+        relation_id = _structure_id(item.get("id"))
+        source, target, kind = _structure_id(item.get("source")), _structure_id(item.get("target")), item.get("type")
+        if source == target or source not in base_ids or target not in base_ids or kind not in STRUCTURE_RELATION_TYPES:
+            raise StructureEditsError("invalid base relation")
+        base_relation_ids.add(relation_id); base_relation_keys.add((source, target, kind))
+    raw_nodes = edits.get("statements", [])
+    if not isinstance(raw_nodes, list) or len(raw_nodes) > MAX_EDIT_NODES:
+        raise StructureEditsError("invalid statements")
+    nodes: list[dict[str, Any]] = []; user_ids: set[str] = set()
+    topic_ids = {item.get("id") for item in structure.get("topics", []) if isinstance(item, dict)}
+    for item in raw_nodes:
+        if not isinstance(item, dict) or set(item) != {"id", "text", "topic_id"}:
+            raise StructureEditsError("invalid statement")
+        identifier = _structure_id(item.get("id")); text = item.get("text"); topic_id = item.get("topic_id")
+        if not identifier.startswith("u:") or identifier in user_ids or identifier in base_ids or not isinstance(text, str) or not text.strip() or len(text) > 2000:
+            raise StructureEditsError("invalid statement")
+        if topic_id is not None and (not isinstance(topic_id, str) or topic_id not in topic_ids):
+            raise StructureEditsError("invalid statement topic")
+        user_ids.add(identifier); nodes.append({"id": identifier, "text": text.strip(), "topic_id": topic_id})
+    hidden = _structure_unique_ids(edits.get("hidden_statement_ids", []), "hidden_statement_ids")
+    if not set(hidden) <= base_ids:
+        raise StructureEditsError("unknown hidden base statement")
+    visible_ids = (base_ids - set(hidden)) | user_ids
+    raw_relations = edits.get("relations", [])
+    if not isinstance(raw_relations, list) or len(raw_relations) > MAX_EDIT_EDGES:
+        raise StructureEditsError("invalid relations")
+    relations: list[dict[str, str]] = []; relation_ids: set[str] = set(); relation_keys: set[tuple[str, str, str]] = set()
+    for item in raw_relations:
+        if not isinstance(item, dict) or set(item) != {"id", "source", "target", "type"}:
+            raise StructureEditsError("invalid relation")
+        identifier, source, target, kind = _structure_id(item.get("id")), _structure_id(item.get("source")), _structure_id(item.get("target")), item.get("type")
+        key = (source, target, kind)
+        if not identifier.startswith("ur:") or identifier in relation_ids or source == target or source not in visible_ids or target not in visible_ids or kind not in STRUCTURE_RELATION_TYPES or key in relation_keys or key in base_relation_keys:
+            raise StructureEditsError("invalid relation")
+        relation_ids.add(identifier); relation_keys.add(key); relations.append({"id": identifier, "source": source, "target": target, "type": kind})
+    hidden_relations = _structure_unique_ids(edits.get("hidden_relation_ids", []), "hidden_relation_ids")
+    if not set(hidden_relations) <= base_relation_ids:
+        raise StructureEditsError("unknown hidden base relation")
+    positions = _structure_positions(edits.get("positions", []), visible_ids)
+    return {"revision": revision, "statements": sorted(nodes, key=lambda x: x["id"]), "relations": sorted(relations, key=lambda x: x["id"]), "hidden_statement_ids": sorted(hidden), "hidden_relation_ids": sorted(hidden_relations), "positions": positions}
+
+
+def _structure_unique_ids(value: Any, field: str) -> list[str]:
+    if not isinstance(value, list) or len(value) > MAX_HIDDEN_ITEMS:
+        raise StructureEditsError(f"invalid {field}")
+    result = [_structure_id(item) for item in value]
+    if len(result) != len(set(result)):
+        raise StructureEditsError(f"duplicate {field}")
+    return result
+
+
+def _structure_positions(value: Any, available_ids: set[str]) -> list[dict[str, Any]]:
+    try:
+        return _positions(value, available_ids)
+    except GraphEditsError as error:
+        raise StructureEditsError(str(error)) from None
+
+
+def update_structure_edits(output_dir: Path, stem: str, expected_revision: int, edits: Any) -> dict[str, Any]:
+    """Atomically replace a structure overlay when its revision still matches."""
+    if type(expected_revision) is not int or expected_revision < 0:
+        raise StructureEditsError("invalid expected revision")
+    path = output_dir / f"{stem}.structure.json"
+    with _STRUCTURE_EDIT_LOCK:
+        envelope = _load(path)
+        if envelope is None or envelope.get("kind") != STRUCTURE_KIND:
+            raise StructureEditsError("structure artifact is unavailable")
+        current = normalize_structure_edits(envelope.get("edits"), envelope)
+        if current["revision"] != expected_revision:
+            raise StructureRevisionConflict("structure edits have changed")
+        supplied = dict(edits) if isinstance(edits, dict) else edits
+        if isinstance(supplied, dict): supplied["revision"] = current["revision"] + 1
+        normalized = normalize_structure_edits(supplied, envelope)
+        envelope["edits"] = normalized
+        _atomic_write_json(path, envelope)
+    return normalized
 
 
 def _as_utterances(segments: list[Any]) -> list[Utterance]:

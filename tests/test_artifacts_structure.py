@@ -152,6 +152,61 @@ def test_load_structure_fail_closed():
         assert artifacts.load_structure(out, "oldver") is None
 
 
+def _structure_envelope():
+    return {
+        "version": 1, "kind": "logical_structure", "statements": [
+            {"id": "s1", "utterance_index": 0, "speaker": "A", "text": "base"},
+            {"id": "s2", "utterance_index": 1, "speaker": "B", "text": "target"},
+        ],
+        "relations": [{"id": "r1", "source": "s1", "target": "s2", "type": "supports"}],
+        "topics": [{"id": "t1", "label": "Topic", "statement_ids": ["s1", "s2"]}],
+        "decision_flows": [],
+    }
+
+
+def test_legacy_structure_gets_empty_edit_overlay():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "meeting.structure.json"
+        path.write_text(json.dumps(_structure_envelope()), encoding="utf-8")
+        loaded = artifacts.load_structure(Path(tmp), "meeting")
+    assert loaded is not None
+    assert loaded["edits"] == artifacts.empty_structure_edits()
+
+
+def test_structure_edits_roundtrip_directed_and_preserves_base():
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp)
+        original = _structure_envelope()
+        (out / "meeting.structure.json").write_text(json.dumps(original), encoding="utf-8")
+        saved = artifacts.update_structure_edits(out, "meeting", 0, {
+            "statements": [{"id": "u:memo", "text": "memo", "topic_id": "t1"}],
+            "relations": [{"id": "ur:1", "source": "u:memo", "target": "s1", "type": "elaborates"}],
+            "hidden_statement_ids": [], "hidden_relation_ids": [],
+            "positions": [{"id": "u:memo", "x": .2, "y": .8}],
+        })
+        loaded = artifacts.load_structure(out, "meeting")
+    assert saved["revision"] == 1
+    assert saved["relations"][0]["source"] == "u:memo"
+    assert loaded is not None and loaded["statements"] == original["statements"]
+    assert loaded["edits"] == saved
+
+
+def test_structure_edits_reject_invalid_references_types_and_cleanup_contract():
+    structure = _structure_envelope()
+    invalid = [
+        {"statements": [], "relations": [{"id": "ur:1", "source": "s1", "target": "missing", "type": "elaborates"}], "hidden_statement_ids": [], "hidden_relation_ids": [], "positions": []},
+        {"statements": [], "relations": [{"id": "ur:1", "source": "s1", "target": "s1", "type": "elaborates"}], "hidden_statement_ids": [], "hidden_relation_ids": [], "positions": []},
+        {"statements": [], "relations": [{"id": "ur:1", "source": "s1", "target": "s2", "type": "unknown"}], "hidden_statement_ids": [], "hidden_relation_ids": [], "positions": []},
+        {"statements": [], "relations": [], "hidden_statement_ids": ["missing"], "hidden_relation_ids": [], "positions": []},
+    ]
+    for edits in invalid:
+        try:
+            artifacts.normalize_structure_edits(edits, structure)
+        except artifacts.StructureEditsError:
+            continue
+        assert False, edits
+
+
 if __name__ == "__main__":
     from _runner import run_module
 
