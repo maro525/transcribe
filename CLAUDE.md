@@ -1,21 +1,23 @@
-# Current Project: ADHOC — Editable word network planning
+# Current Project: ADHOC — Editable discourse-structure network
 
 ## Goal
-- Make the detail page's word-network canvas editable after batch completion, with persistent node/edge edits and pinned positions.
+- Add persistent statement/relation editing to the detail page's discourse-structure network, stacked on the editable word-network branch.
 
 ## Key files
 - `src/web/templates/detail.html`
 - `src/web/app.py`
 - `src/artifacts.py`
 - `tests/test_artifacts.py`
-- `tests/test_web_app.py` (planned)
+- `tests/test_artifacts_structure.py`
+- `tests/test_web_app.py`
 
 ## Architecture
-- Keep the generated `CooccurrenceGraph.snapshot()` as an immutable base and store an optional, revisioned edit overlay in the existing graph artifact.
-- Add a validated, atomic `PUT /jobs/{filename}/graph-edits` endpoint.
-- Merge base + edits in the existing dependency-free Canvas renderer and reheat the force simulation after mutations.
+- Keep generated statements, relations, topics, and decision flows immutable; store a revisioned overlay in the structure artifact.
+- Add a validated, atomic `PUT /jobs/{filename}/structure-edits` endpoint using the graph-edit security pattern.
+- Compose base + edits before building any view; rerun the bounded deterministic `networkScene` layout after mutations.
 
 ## Decisions
-- Explicit edit mode; two-click edge creation; drag pins a node; visible controls handle deletion and unpinning.
-- Persist user nodes/edges, hidden base elements, and normalized pinned positions; detect concurrent edits with a revision and return 409.
-- No new dependencies and no changes to live graph, topic treemap, or decision-flow network.
+- User relations are directed (first click source, second target) and default to `elaborates`; memo statements inherit the edited topic.
+- Persist user statements/relations, hidden base IDs, and normalized pins; use revision/409 and atomic replacement.
+- Do not infer decision-flow semantics from arbitrary relations. Gate 1 decides whether non-network views only note edits or receive explicit relation overlays.
+- Create `feature/editable-structure-network` from `feature/editable-word-network`, not main; add no dependencies.
