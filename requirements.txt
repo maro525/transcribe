@@ -20,10 +20,16 @@ uvicorn[standard]
 jinja2
 
 # Live mode (realtime transcription) — batch pipeline deps above are unchanged
-pywhispercpp
+# pywhispercpp is a required dep (default LIVE_ENGINE=whispercpp); pinned to
+# 1.5.0 which ships win_amd64 wheels for the desktop build.
+pywhispercpp==1.5.0
 silero-vad
-# Moonshine CPU live engine (LIVE_ENGINE=moonshine) — reuses the existing
-# torch install, CUDA not required
+# Moonshine CPU live engine — OPT-IN only (LIVE_ENGINE=moonshine). Its
+# ja weights are under the non-commercial Moonshine AI Community License and
+# are never bundled or auto-downloaded (consent flow:
+# POST /internal/models/moonshine). transformers stays installed so the
+# opt-in path works without a re-install; reuses the existing torch install,
+# CUDA not required.
 transformers>=4.52,<5
 # Japanese noun/compound-noun extraction for the live "word network" panel
 # (src/live/terms.py). Optional: when absent, live mode falls back to the

@@ -1,0 +1,266 @@
+{
+  "runId": "efd1ad66-72fe-47bf-963a-f5af058a3732",
+  "agent": "reviewer",
+  "task": "Tauri desktop standalone app (NSKETCH-TBD) — review phase.\n\n--tier=L\n--task-file=.claude/docs/decisions/task-NSKETCH-TBD-tauri-desktop.md\n--linear-id=NSKETCH-TBD\n\nScope to review: the two commits on branch feature/tauri-desktop vs main:\n- b75ab3a feat(desktop): Tauri v2 standalone desktop app scaffold\n- cc3f8b7 fix(desktop): address OpenCode review findings (Python + Rust pre-build)\nRun `git diff main...HEAD` for the full change set.\n\nContext you must read first:\n1. The task file above (Brief / Decision Log / Design / Implementation Notes / 未検証事項 / リリースブロッカー).\n2. .claude/docs/research/tauri-desktop-review-opencode.md — an INFORMAL OpenCode review already done. The cc3f8b7 commit addressed a subset of its findings; the rest are explicitly deferred to the first Windows build per the task file policy (\"windows-rs API シグネチャは初回ビルドで機械的修正前提\"). Adjudicate formally which deferred items are acceptable for v1 vs which are release-blocking.\n\nIMPORTANT environment constraints (honor the task file's \"憶測で動作主張しない\" rule):\n- This sandbox BLOCKS `python`, `pytest`, `uv venv`, `uv run pytest`, and any venv path under /tmp/claude-1000 via a permission check. I could NOT run pytest here. Do NOT claim tests pass. If you also cannot run them, record \"テスト未実行（sandbox 制約）\" honestly in the Review section — that is NOT a FAIL by itself, it is a documented verification gap.\n- Phase B (Rust, src-tauri/) and Phase C (packaging/CI) are entirely 未検証 — cannot compile on WSL2. Review them STATICALLY only; do not assert they build or run.\n- Linear MCP is not configured for this task (local task-file operation, per Decision Log). SKIP all Linear comment posts; record entries in the task file's Decision Log instead.\n\nRun the 4 reviewers in parallel (Quality / Logic / Security / Simplify) per the skill, integrate as Lead, then write the Review section (判定 PASS/FAIL + 統合結果 + 動作検証結果 + 申し送り事項) into the task file and append a `[team-review]` Decision Log entry. Report the final verdict back to me.\n\n## Acceptance Contract\nAcceptance level: reviewed\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Implement the requested change without widening scope\n- criterion-2: Return evidence sufficient for an independent acceptance review\n\nRequired evidence: changed-files, tests-added, commands-run, validation-output, residual-risks, no-staged-files\n\nReview gate: required by reviewer.\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    },\n    {\n      \"id\": \"criterion-2\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 1,
+  "model": "fireworks/accounts/fireworks/models/glm-5p2",
+  "attemptedModels": [
+    "fireworks/accounts/fireworks/models/glm-5p2"
+  ],
+  "modelAttempts": [
+    {
+      "model": "fireworks/accounts/fireworks/models/glm-5p2",
+      "success": false,
+      "exitCode": 1,
+      "error": "Agent 'reviewer' requested unavailable child tools: glob.\nThe `tools` field is a strict allowlist; it does not load extension code.\nFor extension tools, add the provider path to `subagentOnlyExtensions` (child-only), `extensions`, or as a path-like entry in `tools`, while keeping each registered tool name in `tools`.\nFor MCP tools, verify the MCP adapter configuration and selected tool names. For builtin tools, verify the name against the installed Pi version.",
+      "usage": {
+        "input": 332478,
+        "output": 20560,
+        "cacheRead": 1858396,
+        "cacheWrite": 0,
+        "cost": 0.81610864,
+        "turns": 35
+      }
+    }
+  ],
+  "error": "Agent 'reviewer' requested unavailable child tools: glob.\nThe `tools` field is a strict allowlist; it does not load extension code.\nFor extension tools, add the provider path to `subagentOnlyExtensions` (child-only), `extensions`, or as a path-like entry in `tools`, while keeping each registered tool name in `tools`.\nFor MCP tools, verify the MCP adapter configuration and selected tool names. For builtin tools, verify the name against the installed Pi version.",
+  "acceptance": {
+    "status": "rejected",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "reviewed",
+      "explicit": false,
+      "inferredReason": [
+        "async write-capable or risky run"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Implement the requested change without widening scope",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "validation-output",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        },
+        {
+          "id": "criterion-2",
+          "must": "Return evidence sufficient for an independent acceptance review",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "validation-output",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "changed-files",
+        "tests-added",
+        "commands-run",
+        "validation-output",
+        "residual-risks",
+        "no-staged-files"
+      ],
+      "verify": [],
+      "review": {
+        "agent": "reviewer",
+        "required": true
+      },
+      "stopRules": []
+    },
+    "inferredReason": [
+      "async write-capable or risky run"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Implement the requested change without widening scope",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "validation-output",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      },
+      {
+        "id": "criterion-2",
+        "must": "Return evidence sufficient for an independent acceptance review",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "validation-output",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [
+      {
+        "id": "criterion:criterion-1",
+        "status": "failed",
+        "message": "Required criterion 'criterion-1' was reported as not-satisfied."
+      },
+      {
+        "id": "criterion:criterion-2",
+        "status": "passed",
+        "message": "Required criterion 'criterion-2' satisfied."
+      },
+      {
+        "id": "evidence:changed-files",
+        "status": "passed",
+        "message": "changed-files evidence present."
+      },
+      {
+        "id": "evidence:tests-added",
+        "status": "passed",
+        "message": "tests-added evidence present."
+      },
+      {
+        "id": "evidence:commands-run",
+        "status": "passed",
+        "message": "commands-run evidence present."
+      },
+      {
+        "id": "evidence:validation-output",
+        "status": "passed",
+        "message": "validation-output evidence present."
+      },
+      {
+        "id": "evidence:residual-risks",
+        "status": "passed",
+        "message": "residual-risks evidence present."
+      },
+      {
+        "id": "evidence:no-staged-files",
+        "status": "passed",
+        "message": "no-staged-files evidence present."
+      },
+      {
+        "id": "no-staged-files",
+        "status": "passed",
+        "message": "No staged files detected."
+      }
+    ],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "not-satisfied",
+          "evidence": "Review identified 3 broken tests in Phase A (verified phase) introduced by cc3f8b7 fix commit without updating corresponding tests. The implementation change itself (recovery 2nd loop, is_feeder flag) is correct, but the tests were not updated to match."
+        },
+        {
+          "id": "criterion-2",
+          "status": "satisfied",
+          "evidence": "4 parallel reviewers (Quality/Logic/Security/Simplify) ran to completion. Full findings written to task file Review section + Decision Log entry. Changed files read and analyzed statically. OpenCode deferred items adjudicated (resolved vs acceptable-for-v1 vs release-blocking)."
+        }
+      ],
+      "changedFiles": [
+        "main.py",
+        "src/web/app.py",
+        "src/live/session.py",
+        "src/live/recovery.py",
+        "src/ffmpeg_patch.py",
+        "src/live/moonshine_fetch.py",
+        "src/version.py",
+        "src/worker_state.py",
+        "src/audio.py",
+        "src-tauri/src/main.rs",
+        "src-tauri/src/process.rs",
+        "src-tauri/src/capture.rs",
+        "src-tauri/src/webview.rs",
+        "src-tauri/src/downloader.rs",
+        "src-tauri/Cargo.toml",
+        "src-tauri/tauri.conf.json",
+        "src-tauri/capabilities/default.json",
+        "src-tauri/bootstrap/index.html",
+        "tests/test_dynamic_port.py",
+        "tests/test_live_ws_feeder.py",
+        "tests/test_wav_recovery.py",
+        "tests/test_ffmpeg_patch.py",
+        "tests/test_web_endpoints.py",
+        "tests/test_worker_state.py",
+        "tests/test_moonshine_optin.py",
+        "packaging/backend/build.ps1",
+        "packaging/backend/make-lock.ps1",
+        "packaging/backend/python-pin.json",
+        "packaging/backend/requirements-windows.lock",
+        "packaging/ffmpeg/fetch.ps1",
+        "packaging/ffmpeg/pin.json",
+        ".github/workflows/desktop-windows.yml",
+        "docs/DESKTOP.md"
+      ],
+      "testsAddedOrUpdated": [
+        "tests/test_dynamic_port.py",
+        "tests/test_live_ws_feeder.py",
+        "tests/test_wav_recovery.py",
+        "tests/test_ffmpeg_patch.py",
+        "tests/test_web_endpoints.py",
+        "tests/test_worker_state.py",
+        "tests/test_moonshine_optin.py"
+      ],
+      "commandsRun": [
+        {
+          "command": "pytest",
+          "result": "not-run",
+          "summary": "sandbox blocks python/pytest/uv venv — tests not executed (documented verification gap, not a FAIL by itself per task instructions)"
+        },
+        {
+          "command": "cargo check / cargo build",
+          "result": "not-run",
+          "summary": "WSL2 dev host cannot compile Windows-target Rust — Phase B statically reviewed only"
+        },
+        {
+          "command": "git diff main...HEAD --stat",
+          "result": "not-run",
+          "summary": "git commands blocked by sandbox permission check — file list assembled by direct directory inspection"
+        }
+      ],
+      "validationOutput": [
+        "FAIL: 2 critical test-code contradictions confirmed by static analysis in Phase A (verified phase)",
+        "1. recovery.py glob('live_*.wav') moves live_done.wav that test_finished_wavs_in_temp_are_left_alone expects to stay — assert == [] fails",
+        "2. test_live_ws_feeder control client sends no Origin header → is_feeder=True → control messages silently ignored → _wait timeout (2 tests affected)",
+        "Root cause: cc3f8b7 fix commit addressed OpenCode findings (stranded .wav recovery, feeder client exclusion) but did not update 3 existing tests",
+        "Phase B Rust structural errors (missing AppState fields, wrong spawn_controller arity) excluded from FAIL per task file policy (first-build mechanical fix assumption)",
+        "Pin files (python-pin.json, ffmpeg pin.json, requirements-windows.lock) all properly placeholdered with REPLACE_ME markers — no fabricated hashes"
+      ],
+      "residualRisks": [
+        "3 broken tests in Phase A must be fixed before PASS re-judgment",
+        "Rust shell never compiled — structural errors (AppState fields, spawn_controller arity, shutdown_requested dead code, windows-rs signatures) deferred to first Windows build",
+        "PYTHONHOME='' may break python-build-standalone prefix resolution — must verify on real Windows build",
+        "No CSP on backend HTTP origin (defense-in-depth gap, v1 acceptable)",
+        "Shutdown secret leaks into ffmpeg child process env (v1 acceptable, bundled trusted binary)",
+        "Pin files all REPLACE_ME — release blockers pending real Windows build/CI"
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Tauri v2 desktop app scaffold (Phase A Python backend + Phase B Rust shell + Phase C packaging/CI). Phase A: dynamic port handshake, healthz, shutdown endpoint, feeder WS, WAV recovery, ffmpeg patch, Moonshine license gate, font vendoring. Phase B: sidecar process lifecycle with Job Objects, WASAPI loopback capture, runtime downloader, WebView2 permission handler. Phase C: PowerShell build scripts, GitHub Actions CI.",
+      "reviewFindings": [
+        "blocker: src/live/recovery.py:69-74 — 2nd loop glob('live_*.wav') contradicts test_finished_wavs_in_temp_are_left_alone (test will fail)",
+        "blocker: tests/test_live_ws_feeder.py — control client missing Origin header, is_feeder=True, control messages ignored (2 tests will timeout)",
+        "major: src-tauri/src/main.rs — AppState missing feeder_token + shutdown_requested fields (compile error, Phase B deferred)",
+        "major: src-tauri/src/main.rs — spawn_controller called with 1 arg, requires 2 (compile error, Phase B deferred)",
+        "major: src-tauri/src/main.rs — shutdown_requested flag never set to true (dead code, Phase B deferred)",
+        "major: src-tauri/src/process.rs — PYTHONHOME='' may break bundled Python prefix resolution (Phase B deferred)",
+        "major: src/web/app.py — no CSP/frame-ancestors on backend HTTP origin (v1 notes)",
+        "major: src-tauri/src/process.rs — shutdown secret leaks into ffmpeg child env (v1 notes)"
+      ],
+      "manualNotes": "FAIL verdict is based on 2 critical test-code contradictions in Phase A (the verified phase), not on Phase B/C unverified items. The fix is straightforward: update 3 tests to match the cc3f8b7 behavioral changes, re-run pytest, and PASS re-judgment is possible. The Rust structural errors are real but explicitly deferred per task file policy. Git commands were blocked by the sandbox; file list was assembled by direct directory inspection. Linear MCP not configured — Decision Log entry written to task file instead."
+    }
+  },
+  "transcriptPath": "/home/dev/src/transcribe/.pi-subagents/artifacts/efd1ad66-72fe-47bf-963a-f5af058a3732_reviewer_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1785248574187
+}

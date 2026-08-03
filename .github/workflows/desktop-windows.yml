@@ -1,0 +1,316 @@
+# =============================================================================
+# Desktop (Windows x64) build pipeline — NSKETCH-TBD Phase C3
+#
+# STATUS: authored-but-未検証. This workflow was written on WSL2 Linux and has
+# NEVER been executed. Expect first-run fixes on the windows-2022 runner.
+#
+# Jobs:
+#   1. python-tests    (ubuntu)      — existing pytest suite, fast gate
+#   2. backend-archive (windows)     — lock check + build.ps1 → backend zip/manifest
+#   3. tauri-build     (windows)     — ffmpeg fetch + resource staging + NSIS bundle
+#   4. e2e-smoke       (windows)     — EXPERIMENTAL, continue-on-error
+#
+# Triggers: manual (workflow_dispatch) and version tags v*.
+# On tags: backend zip + manifest + NSIS installer are attached to the GitHub
+# Release (public — the Rust first-run downloader depends on these URLs).
+# =============================================================================
+name: desktop-windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      backend_version:
+        description: "Backend runtime version (manifest 'version'), e.g. cpu-2026.07.1"
+        required: false
+        default: "cpu-0.0.0-dev"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # needed to upload release assets on tag builds
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Existing Python test suite (fast, on Linux).
+  # ---------------------------------------------------------------------------
+  python-tests:
+    name: python tests (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies (CPU torch index)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+          pip install pytest
+
+      - name: Run pytest
+        run: pytest -v
+
+  # ---------------------------------------------------------------------------
+  # 2. Backend runtime archive (python-build-standalone + locked site-packages).
+  # ---------------------------------------------------------------------------
+  backend-archive:
+    name: backend archive (windows)
+    runs-on: windows-2022
+    needs: python-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          architecture: x64
+
+      - name: Check requirements-windows.lock is present and up to date
+        shell: powershell
+        run: |
+          powershell -ExecutionPolicy Bypass -File packaging\backend\make-lock.ps1 -Check
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Resolve backend version
+        id: ver
+        shell: powershell
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") {
+            # Tag v1.2.3 -> backend version cpu-1.2.3 (shell app version and
+            # backend runtime version are allowed to move together for now).
+            $tag = "${{ github.ref_name }}"
+            $ver = "cpu-" + $tag.TrimStart("v")
+          } else {
+            $ver = "${{ github.event.inputs.backend_version }}"
+            if ([string]::IsNullOrWhiteSpace($ver)) { $ver = "cpu-0.0.0-dev" }
+          }
+          "backend_version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          # Manifest URL: on tag builds all assets (backend zip + installer) are
+          # attached to the SAME v* release, so the manifest points there. For
+          # dev builds the URL is a placeholder (artifact-only, not downloadable).
+          $base = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
+          if ("${{ github.ref_type }}" -ne "tag") {
+            $base = "https://github.com/${{ github.repository }}/releases/download/UNRELEASED-DEV-BUILD"
+          }
+          "release_base=$base" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Build relocatable backend runtime (build.ps1)
+        shell: powershell
+        run: |
+          powershell -ExecutionPolicy Bypass -File packaging\backend\build.ps1 `
+            -BackendVersion "${{ steps.ver.outputs.backend_version }}" `
+            -ReleaseBaseUrl "${{ steps.ver.outputs.release_base }}"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Upload backend archive artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-archive
+          path: |
+            packaging/backend/dist/*.zip
+            packaging/backend/dist/*.zip.sha256
+            packaging/backend/dist/backend-manifest.json
+          if-no-files-found: error
+
+      - name: Attach backend archive to GitHub Release (tags only)
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            packaging/backend/dist/*.zip
+            packaging/backend/dist/*.zip.sha256
+            packaging/backend/dist/backend-manifest.json
+
+  # ---------------------------------------------------------------------------
+  # 3. Tauri shell build (NSIS, unsigned v1). No Node/npm: the frontend is
+  #    Jinja2 templates served by the Python backend; the Tauri side only has a
+  #    static bootstrap page (Phase B).
+  # ---------------------------------------------------------------------------
+  tauri-build:
+    name: tauri NSIS build (windows)
+    runs-on: windows-2022
+    needs: backend-archive
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify src-tauri exists (owned by Phase B)
+        shell: powershell
+        run: |
+          if (-not (Test-Path "src-tauri\tauri.conf.json")) {
+            Write-Error "src-tauri/tauri.conf.json not found. Phase B (Tauri shell) must land before this job can run."
+            exit 1
+          }
+
+      - name: Download backend manifest (bundled as Tauri resource)
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-archive
+          path: backend-dist
+
+      - name: Fetch + verify pinned LGPL ffmpeg (fetch.ps1)
+        shell: powershell
+        run: |
+          powershell -ExecutionPolicy Bypass -File packaging\ffmpeg\fetch.ps1
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      # Resource staging contract (MUST match src-tauri/tauri.conf.json
+      # bundle.resources, which references repo paths relative to src-tauri/):
+      #   ../main.py                        -> main.py
+      #   ../src                            -> src           (pycache pruned below)
+      #   ../packaging/ffmpeg/ffmpeg.exe    -> ffmpeg/ffmpeg.exe (+ LICENSE/SOURCE)
+      #   ../packaging/backend/manifest.json -> backend-manifest.json
+      # Rust (src-tauri/src/main.rs) resolves: <res>/main.py, <res>/ffmpeg/ffmpeg.exe,
+      # <res>/backend-manifest.json — do not change one side without the other.
+      - name: Stage bundle resources
+        shell: powershell
+        run: |
+          # ffmpeg: fetch.ps1 stages into packaging/ffmpeg/dist; conf references
+          # packaging/ffmpeg/{ffmpeg.exe,LICENSE.txt,SOURCE.txt} directly.
+          Copy-Item packaging\ffmpeg\dist\ffmpeg.exe packaging\ffmpeg\ffmpeg.exe -Force
+          Copy-Item packaging\ffmpeg\dist\LICENSE.txt packaging\ffmpeg\LICENSE.txt -Force
+          Copy-Item packaging\ffmpeg\dist\SOURCE.txt packaging\ffmpeg\SOURCE.txt -Force
+          # backend manifest: conf references packaging/backend/manifest.json
+          Copy-Item backend-dist\backend-manifest.json packaging\backend\manifest.json -Force
+          # Prune caches from the bundled app code (conf bundles ../src as-is)
+          Get-ChildItem src -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
+            ForEach-Object { Remove-Item $_.FullName -Recurse -Force }
+
+      - name: Setup Rust (stable-msvc)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install tauri-cli
+        shell: powershell
+        # NOTE: cargo install is slow (~5-10 min) on cache miss; Swatinem/rust-cache
+        # caches ~/.cargo so subsequent runs are fast. Alternative: tauri-apps/tauri-action.
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Build NSIS installer (unsigned)
+        shell: powershell
+        working-directory: src-tauri
+        # The Tauri bundler downloads NSIS itself on Windows; no separate install step.
+        run: cargo tauri build --bundles nsis
+
+      # -----------------------------------------------------------------------
+      # TODO(signing, post-v1) — deliberately NOT implemented for the unsigned v1:
+      #   - Authenticode code signing of the NSIS installer + main exe
+      #     (signtool + cert from GitHub Environment secret or a signing service;
+      #      configure via tauri.conf.json bundle.windows.certificateThumbprint
+      #      or a post-build signtool step).
+      #   - Tauri updater artifacts + signature: set createUpdaterArtifacts=true,
+      #     provide TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+      #     secrets. Updater signing keys are SEPARATE from Authenticode.
+      # -----------------------------------------------------------------------
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nsis-installer
+          # Default Tauri bundle output path; adjust if Phase B changes target dir.
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
+      - name: Attach installer to GitHub Release (tags only)
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: src-tauri/target/release/bundle/nsis/*.exe
+
+  # ---------------------------------------------------------------------------
+  # 4. EXPERIMENTAL end-to-end smoke test. Marked continue-on-error: this job is
+  #    best-effort and NOT a release gate. Known limitations:
+  #      - First run downloads the >600MB backend archive from GitHub Releases;
+  #        on non-tag builds that asset may not exist yet -> the app can only
+  #        reach its setup screen, and the /healthz poll will fail.
+  #      - Depends on Phase A/B contracts (TAURI_READY log line, /healthz,
+  #        %LOCALAPPDATA%\Transcribe\logs) that are themselves unverified.
+  # ---------------------------------------------------------------------------
+  e2e-smoke:
+    name: e2e smoke (windows, EXPERIMENTAL)
+    runs-on: windows-2022
+    needs: tauri-build
+    continue-on-error: true
+    steps:
+      - name: Download installer artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nsis-installer
+          path: installer
+
+      - name: Silent install (NSIS /S, currentUser)
+        shell: powershell
+        run: |
+          $setup = Get-ChildItem installer -Filter *.exe | Select-Object -First 1
+          if ($null -eq $setup) { Write-Error "No installer found"; exit 1 }
+          Write-Host "Installing $($setup.FullName)"
+          $p = Start-Process -FilePath $setup.FullName -ArgumentList "/S" -PassThru -Wait
+          Write-Host "Installer exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { exit 1 }
+
+      - name: Launch app and poll /healthz via dynamic port from logs
+        shell: powershell
+        timeout-minutes: 15
+        run: |
+          # NSIS currentUser installs default to %LOCALAPPDATA%\Programs\<product>.
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter *.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'transcribe' -and $_.Name -notmatch 'unins' } |
+            Select-Object -First 1
+          if ($null -eq $exe) { Write-Error "Installed app exe not found under %LOCALAPPDATA%\Programs"; exit 1 }
+          Write-Host "Launching $($exe.FullName)"
+          $app = Start-Process -FilePath $exe.FullName -PassThru
+
+          # Phase B contract: Rust drains backend stdout to log files under
+          # %LOCALAPPDATA%\Transcribe\logs, including the TAURI_READY {"port":...}
+          # handshake line. Poll the logs for the port.
+          $logDir = "$env:LOCALAPPDATA\Transcribe\logs"
+          $port = $null
+          $deadline = (Get-Date).AddMinutes(12)   # allows time for first-run backend download
+          while ((Get-Date) -lt $deadline -and -not $port) {
+            Start-Sleep -Seconds 5
+            if (Test-Path $logDir) {
+              $line = Get-ChildItem $logDir -Filter *.log -ErrorAction SilentlyContinue |
+                ForEach-Object { Select-String -Path $_.FullName -Pattern 'TAURI_READY' -ErrorAction SilentlyContinue } |
+                Select-Object -Last 1
+              if ($line) {
+                $m = [regex]::Match($line.Line, '"port"\s*:\s*(\d+)')
+                if ($m.Success) { $port = [int]$m.Groups[1].Value }
+              }
+            }
+            if ($app.HasExited) { Write-Error "App process exited early (code $($app.ExitCode))"; exit 1 }
+          }
+          if (-not $port) { Write-Error "TAURI_READY port not found in logs within timeout"; exit 1 }
+          Write-Host "Backend port: $port"
+
+          $ok = $false
+          foreach ($i in 1..24) {
+            try {
+              $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/healthz" -UseBasicParsing -TimeoutSec 5
+              if ($r.StatusCode -eq 200) { $ok = $true; Write-Host "healthz: $($r.Content)"; break }
+            } catch { Start-Sleep -Seconds 5 }
+          }
+          if (-not $ok) { Write-Error "/healthz never returned 200"; exit 1 }
+
+          # Close the app and verify process-tree cleanup (Job Object contract).
+          Write-Host "Closing app (pid $($app.Id))"
+          Stop-Process -Id $app.Id -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 15
+          $orphans = Get-Process -Name python, ffmpeg -ErrorAction SilentlyContinue
+          if ($orphans) {
+            $orphans | Format-Table Id, ProcessName, Path -AutoSize | Out-String | Write-Host
+            Write-Error "Orphan backend processes remain after app close (Job Object cleanup failed)"
+            exit 1
+          }
+          Write-Host "No orphan python/ffmpeg processes. Smoke test passed."

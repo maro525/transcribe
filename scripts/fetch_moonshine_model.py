@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Download UsefulSensors/moonshine-tiny-ja weights for the CPU live engine.
 
+Thin CLI wrapper around ``src.live.moonshine_fetch.download_moonshine_model``
+(the desktop app uses the same logic via POST /internal/models/moonshine).
 The weights are hosted on Hugging Face and are NOT committed to this
 repository (models/ is gitignored). Run this once before using
 LIVE_ENGINE=moonshine (or LIVE_ENGINE=auto on a non-GPU host):
@@ -26,16 +28,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src import config  # noqa: E402
+from src.live import moonshine_fetch  # noqa: E402
 
-HF_REPO_ID = "UsefulSensors/moonshine-tiny-ja"
-_LICENSE_NOTE = """\
-
-[LICENSE] Moonshine AI Community License (not MIT).
-  - Research / non-commercial use: free.
-  - Commercial use (including internal business use): free under $1M annual
-    revenue, but registration is REQUIRED:
-        https://moonshine.ai/community-license
-"""
+HF_REPO_ID = moonshine_fetch.HF_REPO_ID  # backward-compat re-export
 
 
 def main() -> int:
@@ -48,8 +43,10 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    print(moonshine_fetch.LICENSE_NOTE)
+    print(f"Downloading {HF_REPO_ID} -> {args.dest}/")
     try:
-        from huggingface_hub import snapshot_download
+        path = moonshine_fetch.download_moonshine_model(args.dest)
     except ImportError:
         print(
             "error: huggingface_hub is not installed. "
@@ -57,19 +54,10 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-
-    print(_LICENSE_NOTE)
-    args.dest.mkdir(parents=True, exist_ok=True)
-    print(f"Downloading {HF_REPO_ID} -> {args.dest}/")
-    path = snapshot_download(
-        repo_id=HF_REPO_ID,
-        local_dir=str(args.dest),
-        allow_patterns=["*.json", "*.safetensors", "LICENSE*", "README*"],
-    )
     print(f"Done: {path}")
     print(
-        "LIVE_ENGINE=auto now selects moonshine on non-CUDA hosts with these "
-        "weights present; set LIVE_ENGINE=moonshine to force it."
+        "Set LIVE_ENGINE=moonshine to use these weights (or LIVE_ENGINE=auto "
+        "on a non-CUDA host)."
     )
     return 0
 

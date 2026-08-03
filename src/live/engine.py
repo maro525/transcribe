@@ -129,12 +129,13 @@ def _ggml_weights_present() -> bool:
 def _create_engine(choice: str) -> Engine:
     """Resolve LIVE_ENGINE (auto|whispercpp|moonshine) to a concrete engine.
 
-    The default (empty/unset) is moonshine (CPU-first). The selection
-    (engine + reason) is always logged. ``auto`` prefers the CUDA whisper.cpp
-    path, so GPU hosts opting into ``auto`` keep that behaviour; under ``auto``
-    moonshine is picked only when its weights were explicitly fetched.
+    The default (empty/unset) is whispercpp (pywhispercpp, MIT ggml weights).
+    The selection (engine + reason) is always logged. ``auto`` prefers the
+    CUDA whisper.cpp path; under ``auto`` moonshine is picked only when its
+    weights were explicitly fetched (license-gated — see
+    scripts/fetch_moonshine_model.py / POST /internal/models/moonshine).
     """
-    choice = (choice or "moonshine").strip().lower()
+    choice = (choice or "whispercpp").strip().lower()
     if choice == "whispercpp":
         logger.info("live engine: whispercpp (LIVE_ENGINE=whispercpp)")
         return LiveEngine()

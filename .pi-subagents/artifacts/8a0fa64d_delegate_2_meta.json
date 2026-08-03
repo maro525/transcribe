@@ -1,0 +1,138 @@
+{
+  "runId": "8a0fa64d",
+  "agent": "delegate",
+  "task": "Security review of the Tauri desktop app implementation. Read and review these files for authentication gaps, input validation/sanitization, hardcoded secrets, injection vulnerabilities, and attack surface:\n\nPython backend:\n- /home/dev/src/transcribe/src/web/app.py (shutdown secret, feeder token, host allowlist, origin check, moonshine endpoint, traversal rejection)\n- /home/dev/src/transcribe/src/live/session.py (TAURI_EVENT stdout emission)\n- /home/dev/src/transcribe/src/live/moonshine_fetch.py (license gate)\n- /home/dev/src/transcribe/src/ffmpeg_patch.py (subprocess patching)\n- /home/dev/src/transcribe/main.py (dynamic port binding)\n\nRust shell:\n- /home/dev/src/transcribe/src-tauri/src/process.rs (spawn, env injection, shutdown secret generation)\n- /home/dev/src/transcribe/src-tauri/src/downloader.rs (zip extraction, path traversal, manifest validation)\n- /home/dev/src/transcribe/src-tauri/src/webview.rs (navigation policy, permission handler)\n- /home/dev/src/transcribe/src-tauri/src/capture.rs (WS feeder auth)\n- /home/dev/src/transcribe/src-tauri/tauri.conf.json (CSP, capabilities)\n- /home/dev/src/transcribe/src-tauri/capabilities/default.json\n\nFocus on: shutdown secret comparison (timing-safe?), feeder token validation, zip-slip protection, DNS rebinding defense, CSP adequacy, WebView2 permission scope, env var injection, HF token storage. Do NOT run builds or tests. Static review only. Write your findings to /tmp/security-review.md with items tagged [critical/major/minor/info] and a summary at the top.\n\n---\n**Output:**\nWrite your findings to exactly this path: /tmp/security-review.md\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.",
+  "exitCode": 0,
+  "usage": {
+    "input": 84202,
+    "output": 11450,
+    "cacheRead": 269142,
+    "cacheWrite": 0,
+    "cost": 0.20594267999999996,
+    "turns": 10
+  },
+  "model": "fireworks/accounts/fireworks/models/glm-5p2",
+  "attemptedModels": [
+    "fireworks/accounts/fireworks/models/glm-5p2"
+  ],
+  "modelAttempts": [
+    {
+      "model": "fireworks/accounts/fireworks/models/glm-5p2",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 84202,
+        "output": 11450,
+        "cacheRead": 269142,
+        "cacheWrite": 0,
+        "cost": 0.20594267999999996,
+        "turns": 10
+      }
+    }
+  ],
+  "durationMs": 163189,
+  "toolCount": 20,
+  "acceptance": {
+    "status": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only task wording"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only task wording"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Concrete findings with file paths and severities are listed above: 3 [major] (no CSP/framing headers on backend origin; 'unsafe-inline'+withGlobalTauri on bootstrap; shutdown secret leaks to ffmpeg child env), 7 [minor] (feeder no-token-when-secret-unset; GET moonshine status ungated; no X-Frame-Options; tojson version-dependence; manifest-is-the-trust-root for runtime download; zip symlink slip not handled; inherited user env leaks HF_TOKEN/proxy), and 7 [info] positive controls and observations (timing-safe compare, Host allowlist, CSWSH Origin check, TAURI_EVENT no untrusted input, WebView2 mic-only scope, no remote IPC, placeholder updater)."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "grep -rn autoescape/|safe/Markup over src/web/templates",
+          "result": "passed",
+          "summary": "Confirmed Jinja2 autoescape usage; no |safe/Markup found in detail/_transcript/live templates; tojson used for structure/graph script embedding"
+        },
+        {
+          "command": "grep -rn X-Frame-Options/Content-Security-Policy/CORSMiddleware over src/web",
+          "result": "passed",
+          "summary": "No security-header middleware present in the backend — confirms the [major] CSP finding"
+        },
+        {
+          "command": "read of all 11 in-scope files + config.py + bootstrap/index.html",
+          "result": "passed",
+          "summary": "Static review completed; no builds or tests executed per task constraints"
+        }
+      ],
+      "validationOutput": [
+        "No [critical] findings. 3 [major], 7 [minor], 7 [info]. Highest-value fix: add CSP + X-Frame-Options + nosniff middleware to the FastAPI backend (src/web/app.py). Second: strip TRANSCRIBE_SHUTDOWN_SECRET/HF_TOKEN from spawned subprocess env in ffmpeg_patch.py. Third: move bootstrap JS external so script-src 'self' can replace 'unsafe-inline'."
+      ],
+      "residualRisks": [
+        "Entire Rust shell is 【未検証】 (never compiled/run on Windows): security policies are correct on paper but COM/windows-rs/cpal wiring must be confirmed at first Windows build.",
+        "Runtime-download integrity relies on bundled manifest + installer code-signing / resource-dir ACLs, not on an in-app trust anchor.",
+        "Backend HTTP origin has no CSP/framing headers until the [major] finding is addressed.",
+        "Shutdown-secret leak to ffmpeg env is a defense-in-depth gap, not a confirmed exploit (ffmpeg is bundled/trusted)."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No files changed — static review only; findings written to /tmp/security-review.md",
+      "reviewFindings": [
+        "major: src/web/app.py — no CSP / X-Frame-Options / frame-ancestors / nosniff on the backend HTTP origin (only the bootstrap tauri origin is CSP'd); dashboard is frameable and any future template XSS is uncontained",
+        "major: src-tauri/tauri.conf.json + src-tauri/bootstrap/index.html — script-src 'unsafe-inline' with withGlobalTauri:true gives any bootstrap XSS full IPC access (save_hf_token/start_backend/open_external); status() uses innerHTML with invoke-error strings",
+        "major: src-tauri/src/process.rs + src/ffmpeg_patch.py — TRANSCRIBE_SHUTDOWN_SECRET (also the feeder token) is inherited by ffmpeg and all sidecar subprocesses via the env block",
+        "minor: src/web/app.py live_ws — feeder (no-Origin) WS connections accepted with no token when TRANSCRIBE_SHUTDOWN_SECRET is unset (dev-only path)",
+        "minor: src/web/app.py moonshine_status — GET /internal/models/moonshine exposes download status without the x-transcribe-internal gate that the POST has",
+        "minor: src/web/templates/detail.html — {{ structure|tojson }}/{{ graph|tojson }} in <script> rely on Jinja2>=3.1 HTML-safe tojson; pin the version",
+        "minor: src-tauri/src/downloader.rs read_manifest — url+sha256 come from the same bundled manifest; trust root is installer signing/ACLs, not the in-app check",
+        "minor: src-tauri/src/downloader.rs extract_zip — symlink zip entries not explicitly rejected; potential zip-slip-via-symlink depending on zip-crate behavior; confirm and reject symlink entries",
+        "minor: src-tauri/src/process.rs build_env_block — inherits entire parent env; a pre-existing HF_TOKEN leaks to the sidecar even with no keyring token; HTTPS_PROXY honored by downloader (documented trade-off, SHA-256 still guards integrity)",
+        "info: src/web/app.py — shutdown/feeder token comparison uses hmac.compare_digest (timing-safe); secret is OsRng 32-byte; positive control",
+        "info: src/web/app.py — Host allowlist applied to all HTTP + WS handshake; WEB_HOST pinned to 127.0.0.1 by Rust shell; DNS-rebinding defense OK",
+        "info: src/live/session.py — TAURI_EVENT payload contains only hardcoded capture value + generated session_id; no untrusted input on stdout command channel",
+        "info: src-tauri/src/webview.rs — WebView2 permission handler grants microphone-only for exact backend origin, denies all else; policy correct (wiring 【未検証】)",
+        "info: src-tauri/capabilities/default.json — no dangerousRemoteDomainIpcAccess; remote backend origin gets no Tauri IPC; positive control",
+        "info: src-tauri/tauri.conf.json — updater ships placeholder endpoint+pubkey and createUpdaterArtifacts:false; remove the plugins.updater block until a real key/endpoint exist"
+      ],
+      "manualNotes": "Static review only; no builds or tests run per task instructions. Several Rust modules self-mark as 【未検証】 (never compiled on Windows) — the security policies reviewed are correct but the native API wiring was not and cannot be verified without a Windows toolchain. Recommendation priorities: (1) backend CSP+framing headers, (2) strip secrets from child env, (3) external bootstrap JS, (4) reject zip symlink entries, (5) allow-list sidecar env."
+    }
+  },
+  "transcriptPath": "/home/dev/src/transcribe/.pi-subagents/artifacts/8a0fa64d_delegate_2_transcript.jsonl",
+  "timestamp": 1785248029975
+}

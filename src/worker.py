@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from . import config
+from . import config, worker_state
 from .artifacts import save_artifacts
 from .auth import load_hf_token
 from .formatter import save_transcript
@@ -33,6 +33,7 @@ def bootstrap_history() -> None:
 def run() -> None:
     """Long-running worker. Loads models, then watches the input folder."""
     try:
+        worker_state.set_state(worker_state.WORKER_LOADING)
         store.set_system_message("loading models...")
         hf_token = load_hf_token(config.ENV_FILE)
         device = get_device()
@@ -57,7 +58,9 @@ def run() -> None:
         store.set_system_message(
             f"ready (device: {device}, whisper: {resolved.name} — {resolved.reason})"
         )
+        worker_state.set_state(worker_state.WORKER_READY)
     except Exception as error:
+        worker_state.set_state(worker_state.WORKER_FAILED)
         store.set_system_message(f"startup failed: {error}")
         raise
 

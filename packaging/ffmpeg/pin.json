@@ -1,0 +1,26 @@
+{
+  "_comment": [
+    "Pin for the BtbN FFmpeg Windows x64 LGPL STATIC build fetched by fetch.ps1.",
+    "STATUS: PLACEHOLDER — url + sha256 MUST be pinned before first release.",
+    "How to pin:",
+    "  1. Open https://github.com/BtbN/FFmpeg-Builds/releases and pick a DATED release tag",
+    "     (e.g. autobuild-YYYY-MM-DD-...). NEVER use the 'latest' rolling tag or any",
+    "     ffmpeg-master-latest-* asset — those change under the same URL.",
+    "  2. Choose the win64 *lgpl* NON-shared asset for a release branch, e.g.:",
+    "       ffmpeg-n7.1-<nn>-<hash>-win64-lgpl-7.1.zip",
+    "     ('lgpl' = static single-exe build; NOT 'gpl', NOT 'nonfree', NOT 'lgpl-shared').",
+    "  3. Set 'url' to that asset's download URL, 'version' to the ffmpeg version string",
+    "     (e.g. 'n7.1'), 'release_tag' to the BtbN release tag.",
+    "  4. Download once, compute SHA-256 (Get-FileHash -Algorithm SHA256), cross-check with",
+    "     the checksums file on the same BtbN release if present, and set 'sha256'.",
+    "  5. In 'source_url', record where the corresponding SOURCE archives live (BtbN",
+    "     publishes source tarballs alongside builds) — required for LGPL compliance,",
+    "     see packaging/README.md.",
+    "fetch.ps1 refuses to run while sha256 starts with 'REPLACE_ME'."
+  ],
+  "version": "n7.1",
+  "release_tag": "REPLACE_ME_autobuild-YYYY-MM-DD-XX-XX",
+  "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/REPLACE_ME_TAG/REPLACE_ME_ffmpeg-nX.Y-win64-lgpl-X.Y.zip",
+  "sha256": "REPLACE_ME_WITH_REAL_SHA256",
+  "source_url": "https://github.com/BtbN/FFmpeg-Builds/releases/tag/REPLACE_ME_TAG"
+}

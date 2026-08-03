@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Minimal capability for the bootstrap (setup) page only. The main window starts on the bundled bootstrap page (tauri origin); once it navigates to the backend at http://127.0.0.1:<port>/ the origin is remote and Tauri exposes NO IPC there (dangerousRemoteDomainIpcAccess is intentionally not configured).",
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}

@@ -1,0 +1,33 @@
+FFmpeg build provenance and source availability
+================================================
+
+This application bundles an unmodified ffmpeg.exe built by the BtbN
+FFmpeg-Builds project and invokes it as a separate process (subprocess).
+FFmpeg is licensed under the GNU Lesser General Public License (LGPL)
+version 2.1 or later. See the accompanying LICENSE.txt for the full text.
+
+  FFmpeg version   : {{FFMPEG_VERSION}}
+  Build variant    : win64 lgpl (static, single executable; no GPL or
+                     nonfree components enabled)
+  Builder          : BtbN FFmpeg-Builds (https://github.com/BtbN/FFmpeg-Builds)
+  Release tag      : {{BTBN_RELEASE_TAG}}
+  Exact build URL  : {{BUILD_URL}}
+  Archive SHA-256  : {{BUILD_SHA256}}
+  Fetched on       : {{FETCH_DATE}}
+
+Corresponding source code
+-------------------------
+The complete corresponding source code for this exact build (FFmpeg and the
+enabled LGPL-compatible libraries) is available from the same BtbN release:
+
+  {{SOURCE_URL}}
+
+and from the FFmpeg project itself: https://ffmpeg.org/download.html
+If the above URLs become unavailable, a copy of the corresponding source
+will be provided on request; contact the distributor of this application.
+
+Trademarks / endorsement
+------------------------
+FFmpeg is a trademark of Fabrice Bellard, originator of the FFmpeg project.
+This application is not endorsed by, affiliated with, or sponsored by the
+FFmpeg project or the BtbN FFmpeg-Builds project.
