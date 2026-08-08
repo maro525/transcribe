@@ -258,9 +258,7 @@ async fn start_backend_inner(app: &AppHandle, state: &State<'_, AppState>) -> Re
     }
 
     // HF token from the Credential Manager (optional).
-    let hf_token = hf_token_entry()
-        .ok()
-        .and_then(|e| e.get_password().ok());
+    let hf_token = hf_token_entry().ok().and_then(|e| e.get_password().ok());
 
     // 32 random bytes -> 64 hex chars.
     let mut secret_bytes = [0u8; 32];
@@ -363,11 +361,15 @@ async fn start_backend_inner(app: &AppHandle, state: &State<'_, AppState>) -> Re
         // start_backend call takes the "already running" path and simply
         // re-navigates.
         tokio::time::sleep(Duration::from_millis(500)).await;
-        webview::navigate_to_backend(app, &state.allowed_origin, ready.port).map_err(
-            |second| format!("ナビゲーションに失敗しました (1回目: {first} / 再試行: {second})"),
-        )?;
+        webview::navigate_to_backend(app, &state.allowed_origin, ready.port).map_err(|second| {
+            format!("ナビゲーションに失敗しました (1回目: {first} / 再試行: {second})")
+        })?;
     }
-    emit_backend_status(app, "running", Some(format!("backend {}", ready.backend_version)));
+    emit_backend_status(
+        app,
+        "running",
+        Some(format!("backend {}", ready.backend_version)),
+    );
     Ok(())
 }
 
@@ -389,7 +391,9 @@ fn on_backend_exit(app: &AppHandle, code: Option<u32>) {
     // Process is already dead: this returns quickly, closes the process/job
     // handles, and the Job close reaps any orphaned descendants (ffmpeg).
     process::shutdown_blocking(&handle);
-    let code_str = code.map(|c| c.to_string()).unwrap_or_else(|| "unknown".into());
+    let code_str = code
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| "unknown".into());
     eprintln!("[shell] backend process exited unexpectedly (code {code_str})");
     // `stage` keeps the bootstrap page's existing listener working; `state` +
     // `code` are the documented shape for backend-death notifications.
@@ -473,6 +477,7 @@ fn disk_free_bytes(_path: &std::path::Path) -> Result<u64, String> {
 /// Graceful, idempotent backend teardown; used on every exit path.
 fn shutdown_backend(app: &AppHandle) {
     if let Some(state) = app.try_state::<AppState>() {
+        state.shutdown_requested.store(true, Ordering::SeqCst);
         let taken = state.backend.lock().ok().and_then(|mut g| g.take());
         if let Some(handle) = taken {
             // Contract: POST /internal/shutdown, wait <=10 s, kill, close Job.
@@ -498,7 +503,8 @@ fn main() {
             let allowed_origin: webview::AllowedOrigin = Arc::new(std::sync::RwLock::new(None));
             // Capture controller runs for the app lifetime; commands arrive
             // from process.rs (TAURI_EVENT stdout lines).
-            let capture_tx = capture::spawn_controller(port.clone());
+            let feeder_token = Arc::new(Mutex::new(String::new()));
+            let capture_tx = capture::spawn_controller(port.clone(), feeder_token.clone());
 
             app.manage(AppState {
                 paths,
@@ -506,8 +512,10 @@ fn main() {
                 port,
                 allowed_origin: allowed_origin.clone(),
                 capture_tx,
+                feeder_token,
                 download_running: AtomicBool::new(false),
                 backend_starting: AtomicBool::new(false),
+                shutdown_requested: AtomicBool::new(false),
             });
 
             webview::create_main_window(&handle, allowed_origin)?;

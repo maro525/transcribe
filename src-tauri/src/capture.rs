@@ -52,12 +52,12 @@ use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use futures_util::{SinkExt, StreamExt};
 use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
-use futures_util::{SinkExt, StreamExt};
 
 /// Samples per WS frame (s16 mono @16 kHz) => 4096 bytes per binary frame.
 const FRAME_SAMPLES: usize = 2048;
@@ -198,8 +198,7 @@ fn run_audio_thread(frames_tx: broadcast::Sender<Vec<u8>>, stop: Arc<AtomicBool>
         cpal::SampleFormat::I16 => device.build_input_stream(
             &config,
             move |data: &[i16], _| {
-                let scratch: Vec<f32> =
-                    data.iter().map(|&s| s as f32 / 32768.0).collect();
+                let scratch: Vec<f32> = data.iter().map(|&s| s as f32 / 32768.0).collect();
                 pipeline.push_f32(&scratch);
             },
             err_fn,
@@ -253,11 +252,7 @@ struct Pipeline {
 }
 
 impl Pipeline {
-    fn new(
-        channels: usize,
-        src_rate: f64,
-        frames_tx: broadcast::Sender<Vec<u8>>,
-    ) -> Self {
+    fn new(channels: usize, src_rate: f64, frames_tx: broadcast::Sender<Vec<u8>>) -> Self {
         Self {
             channels: channels.max(1),
             resampler: LinearResampler::new(src_rate, TARGET_RATE),
@@ -350,10 +345,7 @@ fn feeder_request(
     let mut request = url
         .into_client_request()
         .map_err(|e| format!("build WS request: {e}"))?;
-    let token = feeder_token
-        .lock()
-        .map(|g| g.clone())
-        .unwrap_or_default();
+    let token = feeder_token.lock().map(|g| g.clone()).unwrap_or_default();
     if token.is_empty() {
         // Should not happen (main.rs sets the token before the backend can
         // request capture); connect anyway and let the server decide.

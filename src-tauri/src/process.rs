@@ -126,7 +126,11 @@ struct RotatingLog {
 impl RotatingLog {
     fn new(path: PathBuf) -> Self {
         let written = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        Self { path, file: None, written }
+        Self {
+            path,
+            file: None,
+            written,
+        }
     }
 
     fn write_line(&mut self, line: &str) {
@@ -149,9 +153,8 @@ impl RotatingLog {
     fn rotate(&mut self) {
         self.file = None;
         // backend.log.(KEEP-1) is discarded; shift the rest up by one.
-        let numbered = |n: usize| -> PathBuf {
-            PathBuf::from(format!("{}.{n}", self.path.display()))
-        };
+        let numbered =
+            |n: usize| -> PathBuf { PathBuf::from(format!("{}.{n}", self.path.display())) };
         let _ = fs::remove_file(numbered(LOG_KEEP - 1));
         for n in (1..LOG_KEEP - 1).rev() {
             let _ = fs::rename(numbered(n), numbered(n + 1));
@@ -187,9 +190,8 @@ fn drain_stdout<R: Read + Send + 'static>(
                             // Receiver may be gone after startup; ignore.
                             let _ = ready_tx.send(info);
                         }
-                        Err(e) => log.write_line(&format!(
-                            "[shell] failed to parse TAURI_READY line: {e}"
-                        )),
+                        Err(e) => log
+                            .write_line(&format!("[shell] failed to parse TAURI_READY line: {e}")),
                     }
                 } else if let Some(json) = line.strip_prefix(EVENT_PREFIX) {
                     match serde_json::from_str::<TauriEventLine>(json.trim()) {
@@ -210,9 +212,8 @@ fn drain_stdout<R: Read + Send + 'static>(
                                 let _ = capture_tx.send(cmd);
                             }
                         }
-                        Err(e) => log.write_line(&format!(
-                            "[shell] failed to parse TAURI_EVENT line: {e}"
-                        )),
+                        Err(e) => log
+                            .write_line(&format!("[shell] failed to parse TAURI_EVENT line: {e}")),
                     }
                 }
             }
@@ -492,9 +493,7 @@ pub fn spawn_exit_monitor(
     handle: &BackendHandle,
     on_exit: Box<dyn FnOnce(Option<u32>) + Send + 'static>,
 ) -> Result<(), String> {
-    use windows::Win32::Foundation::{
-        CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE,
-    };
+    use windows::Win32::Foundation::{CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE};
     use windows::Win32::System::Threading::{
         GetCurrentProcess, GetExitCodeProcess, WaitForSingleObject, INFINITE,
     };
@@ -610,16 +609,10 @@ fn quote_windows_arg(arg: &str) -> String {
 fn build_env_block(extra: &[(OsString, OsString)]) -> Vec<u16> {
     let mut map: BTreeMap<String, (OsString, OsString)> = BTreeMap::new();
     for (k, v) in std::env::vars_os() {
-        map.insert(
-            k.to_string_lossy().to_uppercase(),
-            (k, v),
-        );
+        map.insert(k.to_string_lossy().to_uppercase(), (k, v));
     }
     for (k, v) in extra {
-        map.insert(
-            k.to_string_lossy().to_uppercase(),
-            (k.clone(), v.clone()),
-        );
+        map.insert(k.to_string_lossy().to_uppercase(), (k.clone(), v.clone()));
     }
     let mut block: Vec<u16> = Vec::new();
     for (_, (k, v)) in map {
@@ -648,9 +641,15 @@ pub fn contract_env(
 
     let mut env: Vec<(OsString, OsString)> = vec![
         ("TRANSCRIBE_DYNAMIC_PORT".into(), "1".into()),
-        ("TRANSCRIBE_BASE_DIR".into(), base_dir.as_os_str().to_owned()),
+        (
+            "TRANSCRIBE_BASE_DIR".into(),
+            base_dir.as_os_str().to_owned(),
+        ),
         ("HF_HOME".into(), model_cache_dir.as_os_str().to_owned()),
-        ("XDG_CACHE_HOME".into(), model_cache_dir.as_os_str().to_owned()),
+        (
+            "XDG_CACHE_HOME".into(),
+            model_cache_dir.as_os_str().to_owned(),
+        ),
         ("FFMPEG_PATH".into(), ffmpeg_exe.as_os_str().to_owned()),
         ("PATH".into(), new_path),
         // Not part of the frozen contract but required for it to work:

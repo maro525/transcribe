@@ -98,7 +98,11 @@ fn origin_of(url: &Url) -> Option<String> {
 
 /// Publishes the backend origin and navigates the main window to it.
 /// Call only after /healthz succeeded.
-pub fn navigate_to_backend(app: &AppHandle, allowed: &AllowedOrigin, port: u16) -> Result<(), String> {
+pub fn navigate_to_backend(
+    app: &AppHandle,
+    allowed: &AllowedOrigin,
+    port: u16,
+) -> Result<(), String> {
     let origin = format!("http://127.0.0.1:{port}");
     if let Ok(mut guard) = allowed.write() {
         *guard = Some(origin.clone());
@@ -108,7 +112,9 @@ pub fn navigate_to_backend(app: &AppHandle, allowed: &AllowedOrigin, port: u16) 
         .ok_or_else(|| "main window not found".to_string())?;
     let url = Url::parse(&format!("{origin}/")).map_err(|e| e.to_string())?;
     // WebviewWindow::navigate — tauri 2.x. 【未検証】signature/mutability.
-    window.navigate(url).map_err(|e| format!("navigate failed: {e}"))
+    window
+        .navigate(url)
+        .map_err(|e| format!("navigate failed: {e}"))
 }
 
 /// Registers a native WebView2 PermissionRequested handler that grants ONLY
@@ -144,8 +150,8 @@ fn install_permission_handler(window: &WebviewWindow, allowed_origin: AllowedOri
                 }
             };
             let mut token = EventRegistrationToken::default();
-            let handler = PermissionRequestedEventHandler::create(Box::new(
-                move |_sender, args| {
+            let handler =
+                PermissionRequestedEventHandler::create(Box::new(move |_sender, args| {
                     let Some(args) = args else { return Ok(()) };
                     let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
                     args.PermissionKind(&mut kind)?;
@@ -157,9 +163,7 @@ fn install_permission_handler(window: &WebviewWindow, allowed_origin: AllowedOri
                         .read()
                         .ok()
                         .and_then(|g| g.clone())
-                        .map(|origin| {
-                            uri == origin || uri.starts_with(&format!("{origin}/"))
-                        })
+                        .map(|origin| uri == origin || uri.starts_with(&format!("{origin}/")))
                         .unwrap_or(false);
 
                     let state = if origin_ok && kind == COREWEBVIEW2_PERMISSION_KIND_MICROPHONE {
@@ -172,8 +176,7 @@ fn install_permission_handler(window: &WebviewWindow, allowed_origin: AllowedOri
                     };
                     args.SetState(state)?;
                     Ok(())
-                },
-            ));
+                }));
             if let Err(e) = core.add_PermissionRequested(&handler, &mut token) {
                 eprintln!("[webview] add_PermissionRequested failed: {e}");
             }

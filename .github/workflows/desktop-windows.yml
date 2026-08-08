@@ -23,6 +23,11 @@ on:
         description: "Backend runtime version (manifest 'version'), e.g. cpu-2026.07.1"
         required: false
         default: "cpu-0.0.0-dev"
+      bootstrap_lock:
+        description: "Generate Windows lock artifact rather than requiring the committed lock"
+        required: false
+        type: boolean
+        default: false
   push:
     tags:
       - "v*"
@@ -64,6 +69,7 @@ jobs:
     name: backend archive (windows)
     runs-on: windows-2022
     needs: python-tests
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.bootstrap_lock) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -72,7 +78,35 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: x64
 
+      - name: Parse packaging scripts with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $scripts = @('packaging\backend\make-lock.ps1', 'packaging\backend\build.ps1', 'packaging\ffmpeg\fetch.ps1')
+          foreach ($script in $scripts) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $script), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
+          }
+
+      - name: Generate requirements-windows.lock bootstrap artifact
+        if: github.event_name == 'workflow_dispatch' && inputs.bootstrap_lock
+        shell: powershell
+        run: |
+          powershell -ExecutionPolicy Bypass -File packaging\backend\make-lock.ps1
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Upload requirements-windows.lock bootstrap artifact
+        if: github.event_name == 'workflow_dispatch' && inputs.bootstrap_lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: requirements-windows-lock
+          path: packaging/backend/requirements-windows.lock
+          if-no-files-found: error
+
       - name: Check requirements-windows.lock is present and up to date
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.bootstrap_lock) }}
         shell: powershell
         run: |
           powershell -ExecutionPolicy Bypass -File packaging\backend\make-lock.ps1 -Check
@@ -137,6 +171,7 @@ jobs:
     name: tauri NSIS build (windows)
     runs-on: windows-2022
     needs: backend-archive
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.bootstrap_lock) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -242,6 +277,7 @@ jobs:
     name: e2e smoke (windows, EXPERIMENTAL)
     runs-on: windows-2022
     needs: tauri-build
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.bootstrap_lock) }}
     continue-on-error: true
     steps:
       - name: Download installer artifact

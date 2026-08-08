@@ -12,7 +12,7 @@
 
 [package]
 name = "transcribe-desktop"
-version = "0.1.0"
+version = "0.1.0-alpha.2"
 description = "Transcribe — local transcription desktop app (Tauri shell)"
 authors = ["nsketch"]
 edition = "2021"

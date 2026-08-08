@@ -1,7 +1,7 @@
 {
   "_comment": [
     "Pin for the BtbN FFmpeg Windows x64 LGPL STATIC build fetched by fetch.ps1.",
-    "STATUS: PLACEHOLDER — url + sha256 MUST be pinned before first release.",
+    "Pinned against the autobuild-2026-08-02-13-17 checksums.sha256 and a local download SHA-256.",
     "How to pin:",
     "  1. Open https://github.com/BtbN/FFmpeg-Builds/releases and pick a DATED release tag",
     "     (e.g. autobuild-YYYY-MM-DD-...). NEVER use the 'latest' rolling tag or any",
@@ -18,9 +18,9 @@
     "     see packaging/README.md.",
     "fetch.ps1 refuses to run while sha256 starts with 'REPLACE_ME'."
   ],
-  "version": "n7.1",
-  "release_tag": "REPLACE_ME_autobuild-YYYY-MM-DD-XX-XX",
-  "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/REPLACE_ME_TAG/REPLACE_ME_ffmpeg-nX.Y-win64-lgpl-X.Y.zip",
-  "sha256": "REPLACE_ME_WITH_REAL_SHA256",
-  "source_url": "https://github.com/BtbN/FFmpeg-Builds/releases/tag/REPLACE_ME_TAG"
+  "version": "n7.1.5-12-g1fdbca85aa",
+  "release_tag": "autobuild-2026-08-02-13-17",
+  "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-02-13-17/ffmpeg-n7.1.5-12-g1fdbca85aa-win64-lgpl-7.1.zip",
+  "sha256": "7d6b66be8bafc839b15e66a2393d3cbbccee462e2388a1ce75a03dd3856ac453",
+  "source_url": "https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-08-02-13-17"
 }

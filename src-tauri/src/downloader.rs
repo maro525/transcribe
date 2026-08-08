@@ -82,7 +82,12 @@ struct Progress {
 fn emit_progress(app: &AppHandle, phase: &'static str, downloaded: u64, total: u64, bps: u64) {
     let _ = app.emit(
         "runtime-download-progress",
-        Progress { phase, downloaded, total, bytes_per_sec: bps },
+        Progress {
+            phase,
+            downloaded,
+            total,
+            bytes_per_sec: bps,
+        },
     );
 }
 
@@ -90,7 +95,9 @@ fn emit_progress(app: &AppHandle, phase: &'static str, downloaded: u64, total: u
 /// names): restrict it to a safe charset so a tampered manifest cannot inject
 /// path separators or traversal.
 fn valid_version(v: &str) -> bool {
-    !v.is_empty() && v.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    !v.is_empty()
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
 /// Reads the bundled backend manifest from the resource dir.
@@ -98,8 +105,8 @@ pub fn read_manifest(paths: &AppPaths) -> Result<BackendManifest, String> {
     let path = paths.resource_dir.join("backend-manifest.json");
     let data = fs::read_to_string(&path)
         .map_err(|e| format!("backend-manifest.json not found at {}: {e}", path.display()))?;
-    let manifest: BackendManifest =
-        serde_json::from_str(&data).map_err(|e| format!("backend-manifest.json is invalid: {e}"))?;
+    let manifest: BackendManifest = serde_json::from_str(&data)
+        .map_err(|e| format!("backend-manifest.json is invalid: {e}"))?;
     if !valid_version(&manifest.version) {
         return Err(format!(
             "backend-manifest.json version {:?} contains characters outside [A-Za-z0-9._-]",
@@ -124,14 +131,15 @@ fn safe_runtime_record(cur: &CurrentRuntime) -> bool {
     // drive prefix) so `runtimes_dir.join(dir)` cannot escape runtimes/.
     let dir_ok = {
         let mut comps = Path::new(&cur.dir).components();
-        matches!((comps.next(), comps.next()), (Some(Component::Normal(_)), None))
+        matches!(
+            (comps.next(), comps.next()),
+            (Some(Component::Normal(_)), None)
+        )
     };
     // `python_exe` must be relative with only normal components, and its file
     // name must be exactly python.exe.
     let pe = Path::new(&cur.python_exe);
-    let pe_ok = pe
-        .components()
-        .all(|c| matches!(c, Component::Normal(_)))
+    let pe_ok = pe.components().all(|c| matches!(c, Component::Normal(_)))
         && pe.file_name().map(|n| n == "python.exe").unwrap_or(false);
     dir_ok && pe_ok
 }
@@ -163,7 +171,8 @@ pub async fn download_and_install(app: &AppHandle, paths: &AppPaths) -> Result<(
     }
 
     let download_dir = paths.runtimes_dir.join("download");
-    fs::create_dir_all(&download_dir).map_err(|e| format!("create {}: {e}", download_dir.display()))?;
+    fs::create_dir_all(&download_dir)
+        .map_err(|e| format!("create {}: {e}", download_dir.display()))?;
     let partial = download_dir.join(format!("cpu-{}.zip.partial", manifest.version));
 
     // 1+2: download with resume, hashing as we go; verify.
@@ -191,8 +200,8 @@ pub async fn download_and_install(app: &AppHandle, paths: &AppPaths) -> Result<(
 
     // 4: atomic switch.
     emit_progress(app, "install", manifest.size, manifest.size, 0);
-    let python_rel = resolve_python_exe(&extract_tmp, manifest.python_exe.as_deref())
-        .inspect_err(|_| {
+    let python_rel =
+        resolve_python_exe(&extract_tmp, manifest.python_exe.as_deref()).inspect_err(|_| {
             let _ = fs::remove_dir_all(&extract_tmp);
         })?;
     if final_dir.exists() {
@@ -286,7 +295,10 @@ async fn download_with_resume(
         if downloaded > 0 {
             req = req.header(reqwest::header::RANGE, format!("bytes={downloaded}-"));
         }
-        let mut resp = req.send().await.map_err(|e| format!("download request failed: {e}"))?;
+        let mut resp = req
+            .send()
+            .await
+            .map_err(|e| format!("download request failed: {e}"))?;
 
         // 206 sanity: the resumed offset the server declares must match our
         // local partial length, or appended bytes would land at the wrong
@@ -328,7 +340,8 @@ async fn download_with_resume(
                     .write(true)
                     .open(partial)
                     .map_err(|e| format!("create partial: {e}"))?;
-                f.set_len(0).and_then(|_| f.seek(SeekFrom::Start(0)).map(|_| ()))
+                f.set_len(0)
+                    .and_then(|_| f.seek(SeekFrom::Start(0)).map(|_| ()))
                     .map_err(|e| format!("truncate partial: {e}"))?;
                 f
             }
@@ -401,12 +414,15 @@ fn extract_zip(archive: &Path, dest: &Path) -> Result<(), String> {
         };
         let out_path = dest.join(rel);
         if entry.is_dir() {
-            fs::create_dir_all(&out_path).map_err(|e| format!("mkdir {}: {e}", out_path.display()))?;
+            fs::create_dir_all(&out_path)
+                .map_err(|e| format!("mkdir {}: {e}", out_path.display()))?;
             let canon = out_path
                 .canonicalize()
                 .map_err(|e| format!("canonicalize {}: {e}", out_path.display()))?;
             if !canon.starts_with(&dest_canon) {
-                return Err(format!("zip entry {i} escapes the destination dir (zip-slip)"));
+                return Err(format!(
+                    "zip entry {i} escapes the destination dir (zip-slip)"
+                ));
             }
         } else {
             let parent = out_path.parent().unwrap_or(dest);
@@ -415,7 +431,9 @@ fn extract_zip(archive: &Path, dest: &Path) -> Result<(), String> {
                 .canonicalize()
                 .map_err(|e| format!("canonicalize {}: {e}", parent.display()))?;
             if !parent_canon.starts_with(&dest_canon) {
-                return Err(format!("zip entry {i} escapes the destination dir (zip-slip)"));
+                return Err(format!(
+                    "zip entry {i} escapes the destination dir (zip-slip)"
+                ));
             }
             let mut out = fs::File::create(&out_path)
                 .map_err(|e| format!("create {}: {e}", out_path.display()))?;
