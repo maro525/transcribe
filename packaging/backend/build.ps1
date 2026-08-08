@@ -44,16 +44,16 @@ param(
     [string]$ReleaseBaseUrl,
 
     # Pin file for python-build-standalone (version/url/sha256).
-    [string]$PinFile = "$PSScriptRoot\python-pin.json",
+    [string]$PinFile = (Join-Path $PSScriptRoot 'python-pin.json'),
 
     # Hash-locked requirements produced by make-lock.ps1 (on Windows).
-    [string]$LockFile = "$PSScriptRoot\requirements-windows.lock",
+    [string]$LockFile = (Join-Path $PSScriptRoot 'requirements-windows.lock'),
 
     # Where build outputs are written.
-    [string]$OutputDir = "$PSScriptRoot\dist",
+    [string]$OutputDir = (Join-Path $PSScriptRoot 'dist'),
 
     # Scratch dir (deleted and recreated).
-    [string]$WorkDir = "$PSScriptRoot\work",
+    [string]$WorkDir = (Join-Path $PSScriptRoot 'work'),
 
     # Skip the relocation smoke test (NOT recommended; for local debugging only).
     [switch]$SkipSmokeTest

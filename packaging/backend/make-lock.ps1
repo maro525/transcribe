@@ -30,7 +30,7 @@
 [CmdletBinding()]
 param(
     # Input requirements (repo root requirements.txt by default).
-    [string]$Requirements = "$PSScriptRoot\..\..\requirements.txt",
+    [string]$Requirements = (Join-Path $PSScriptRoot '..\..\requirements.txt'),
 
     # Output lock file.
     [string]$LockFile = "$PSScriptRoot\requirements-windows.lock",

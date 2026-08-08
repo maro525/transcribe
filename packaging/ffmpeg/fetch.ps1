@@ -30,10 +30,10 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$PinFile = "$PSScriptRoot\pin.json",
-    [string]$Template = "$PSScriptRoot\SOURCE.txt.template",
-    [string]$OutputDir = "$PSScriptRoot\dist",
-    [string]$WorkDir = "$PSScriptRoot\work"
+    [string]$PinFile = (Join-Path $PSScriptRoot 'pin.json'),
+    [string]$Template = (Join-Path $PSScriptRoot 'SOURCE.txt.template'),
+    [string]$OutputDir = (Join-Path $PSScriptRoot 'dist'),
+    [string]$WorkDir = (Join-Path $PSScriptRoot 'work')
 )
 
 Set-StrictMode -Version 2.0
