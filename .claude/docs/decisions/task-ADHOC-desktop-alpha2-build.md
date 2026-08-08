@@ -108,13 +108,16 @@ GitHub Actions の Windows CI を dispatch で安全に収束させた後、検�
 
 ### テスト
 - Windows lock bootstrap: https://github.com/maro525/transcribe/actions/runs/31265467430 — Python tests と Windows dependency lock bootstrap success。
-- full dispatch: https://github.com/maro525/transcribe/actions/runs/31265944707 — 実行中。必須3ジョブ、NSIS artifact、manifest integrity の最終確認待ち。
+- #31265944707 は Python dependency install が進行しないため cancel（transient/hung runner）。
+- #31266036663 — Python tests / lock check は success、backend relocation smoke が PowerShell による Python sentinel quote 脱落で失敗。`1d02f43` で修正。
+- current dispatch: https://github.com/maro525/transcribe/actions/runs/31266535375 — 必須3ジョブ、Windows Rust check、NSIS artifact、manifest integrity の最終確認待ち。
 
 ### Failure Loop
 - #31264984475: PS 5.1 non-ASCII parser failure → `4aef0a8`, `d2e6617`。
 - #31265104661 / #31265339224: PowerShell parameter-path resolution → `e7b7fe6`, `678d1bc`。
 - #31265339224: pip-tools 7.4.1 vs pip 25 → `b3f38e1`。
 - #31265706105: volatile temporary output path in lock header → `ea3150e`。
+- #31266036663 / backend archive / `print("RELOCATION_SMOKE_OK", ...)` が PowerShell quote で崩れて `NameError` → `1d02f43`。
 
 ### 残課題・注意点
 - plan 8–11 は full dispatch 完走後に完了。tag/release は deploy phase のみが行う。
