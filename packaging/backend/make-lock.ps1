@@ -108,6 +108,11 @@ if ($Check) {
     }
     $tmp = Join-Path $env:TEMP ("requirements-windows.lock.check-" + [guid]::NewGuid().ToString('N'))
     try {
+        # pip-compile treats an existing output file as the baseline for a
+        # non-upgrade compile. Seed the temporary output from the committed
+        # lock so -Check validates the declared input graph without silently
+        # adopting a newly published transitive release from an index.
+        Copy-Item -LiteralPath $LockFile -Destination $tmp -Force
         Invoke-PipCompile $tmp
         $a = Get-NormalizedLines $LockFile
         $b = Get-NormalizedLines $tmp
