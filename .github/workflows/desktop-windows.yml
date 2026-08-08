@@ -65,11 +65,11 @@ jobs:
   # ---------------------------------------------------------------------------
   # 2. Backend runtime archive (python-build-standalone + locked site-packages).
   # ---------------------------------------------------------------------------
-  backend-archive:
-    name: backend archive (windows)
+  lock-bootstrap:
+    name: Windows dependency lock bootstrap
     runs-on: windows-2022
     needs: python-tests
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.bootstrap_lock) }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap_lock }}
     steps:
       - uses: actions/checkout@v4
 
@@ -90,23 +90,33 @@ jobs:
             if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
           }
 
-      - name: Generate requirements-windows.lock bootstrap artifact
-        if: github.event_name == 'workflow_dispatch' && inputs.bootstrap_lock
+      - name: Generate requirements-windows.lock
         shell: powershell
         run: |
           powershell -ExecutionPolicy Bypass -File packaging\backend\make-lock.ps1
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
-      - name: Upload requirements-windows.lock bootstrap artifact
-        if: github.event_name == 'workflow_dispatch' && inputs.bootstrap_lock
+      - name: Upload requirements-windows.lock artifact
         uses: actions/upload-artifact@v4
         with:
           name: requirements-windows-lock
           path: packaging/backend/requirements-windows.lock
           if-no-files-found: error
 
+  backend-archive:
+    name: backend archive (windows)
+    runs-on: windows-2022
+    needs: python-tests
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.bootstrap_lock) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          architecture: x64
+
       - name: Check requirements-windows.lock is present and up to date
-        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.bootstrap_lock) }}
         shell: powershell
         run: |
           powershell -ExecutionPolicy Bypass -File packaging\backend\make-lock.ps1 -Check
