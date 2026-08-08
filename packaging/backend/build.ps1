@@ -204,7 +204,7 @@ if (-not $SkipSmokeTest) {
         'import fastapi',
         'import pywhispercpp.model',
         'import silero_vad',
-        'print("RELOCATION_SMOKE_OK", torch.__version__)'
+        "print('RELOCATION_SMOKE_OK', torch.__version__)"
     ) -join '; '
     & $relocPython -c $smoke
     if ($LASTEXITCODE -ne 0) {
