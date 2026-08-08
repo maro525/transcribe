@@ -237,6 +237,21 @@ jobs:
         with:
           workspaces: src-tauri
 
+      - name: Check Rust shell (locked, Windows MSVC)
+        shell: powershell
+        working-directory: src-tauri
+        run: |
+          cargo check --target x86_64-pc-windows-msvc --locked
+          cargo tree -p wry --locked | Out-File -FilePath "$env:RUNNER_TEMP\wry-dependency-tree.txt" -Encoding utf8
+
+      - name: Upload Rust dependency diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-dependency-diagnostics
+          path: ${{ runner.temp }}/wry-dependency-tree.txt
+          if-no-files-found: warn
+
       - name: Install tauri-cli
         shell: powershell
         # NOTE: cargo install is slow (~5-10 min) on cache miss; Swatinem/rust-cache
