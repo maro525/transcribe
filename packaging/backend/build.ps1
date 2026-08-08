@@ -44,16 +44,16 @@ param(
     [string]$ReleaseBaseUrl,
 
     # Pin file for python-build-standalone (version/url/sha256).
-    [string]$PinFile = (Join-Path $PSScriptRoot 'python-pin.json'),
+    [string]$PinFile,
 
     # Hash-locked requirements produced by make-lock.ps1 (on Windows).
-    [string]$LockFile = (Join-Path $PSScriptRoot 'requirements-windows.lock'),
+    [string]$LockFile,
 
     # Where build outputs are written.
-    [string]$OutputDir = (Join-Path $PSScriptRoot 'dist'),
+    [string]$OutputDir,
 
     # Scratch dir (deleted and recreated).
-    [string]$WorkDir = (Join-Path $PSScriptRoot 'work'),
+    [string]$WorkDir,
 
     # Skip the relocation smoke test (NOT recommended; for local debugging only).
     [switch]$SkipSmokeTest
@@ -62,6 +62,11 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+$scriptDir = Split-Path -Parent $PSCommandPath
+if ([string]::IsNullOrWhiteSpace($PinFile)) { $PinFile = Join-Path $scriptDir 'python-pin.json' }
+if ([string]::IsNullOrWhiteSpace($LockFile)) { $LockFile = Join-Path $scriptDir 'requirements-windows.lock' }
+if ([string]::IsNullOrWhiteSpace($OutputDir)) { $OutputDir = Join-Path $scriptDir 'dist' }
+if ([string]::IsNullOrWhiteSpace($WorkDir)) { $WorkDir = Join-Path $scriptDir 'work' }
 # PS 5.1 defaults to TLS 1.0/1.1 on some hosts; force TLS 1.2 for GitHub.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 

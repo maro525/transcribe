@@ -30,15 +30,20 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$PinFile = (Join-Path $PSScriptRoot 'pin.json'),
-    [string]$Template = (Join-Path $PSScriptRoot 'SOURCE.txt.template'),
-    [string]$OutputDir = (Join-Path $PSScriptRoot 'dist'),
-    [string]$WorkDir = (Join-Path $PSScriptRoot 'work')
+    [string]$PinFile,
+    [string]$Template,
+    [string]$OutputDir,
+    [string]$WorkDir
 )
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+$scriptDir = Split-Path -Parent $PSCommandPath
+if ([string]::IsNullOrWhiteSpace($PinFile)) { $PinFile = Join-Path $scriptDir 'pin.json' }
+if ([string]::IsNullOrWhiteSpace($Template)) { $Template = Join-Path $scriptDir 'SOURCE.txt.template' }
+if ([string]::IsNullOrWhiteSpace($OutputDir)) { $OutputDir = Join-Path $scriptDir 'dist' }
+if ([string]::IsNullOrWhiteSpace($WorkDir)) { $WorkDir = Join-Path $scriptDir 'work' }
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 function Write-Step([string]$Message) { Write-Host "==> $Message" }

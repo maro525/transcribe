@@ -30,10 +30,10 @@
 [CmdletBinding()]
 param(
     # Input requirements (repo root requirements.txt by default).
-    [string]$Requirements = (Join-Path $PSScriptRoot '..\..\requirements.txt'),
+    [string]$Requirements,
 
     # Output lock file.
-    [string]$LockFile = "$PSScriptRoot\requirements-windows.lock",
+    [string]$LockFile,
 
     # Python 3.12 interpreter to run pip-compile with (must be win_amd64 CPython 3.12).
     [string]$Python = 'python',
@@ -48,6 +48,9 @@ $ProgressPreference = 'SilentlyContinue'
 
 $PIP_TOOLS_VERSION = '7.4.1'   # pinned; bump deliberately
 $TORCH_CPU_INDEX = 'https://download.pytorch.org/whl/cpu'
+$scriptDir = Split-Path -Parent $PSCommandPath
+if ([string]::IsNullOrWhiteSpace($Requirements)) { $Requirements = Join-Path $scriptDir '..\..\requirements.txt' }
+if ([string]::IsNullOrWhiteSpace($LockFile)) { $LockFile = Join-Path $scriptDir 'requirements-windows.lock' }
 
 if ($env:OS -ne 'Windows_NT') {
     throw "make-lock.ps1 must run on Windows x64 (lock is platform-specific: cp312/win_amd64). Current OS: $env:OS"
