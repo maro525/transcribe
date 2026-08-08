@@ -63,9 +63,11 @@ if ($LASTEXITCODE -ne 0) {
     throw "Interpreter '$Python' is not CPython 3.12 win_amd64. The lock must be resolved on the target platform."
 }
 
-# ---- ensure pinned pip-tools
-& $Python -m pip install --disable-pip-version-check --quiet "pip-tools==$PIP_TOOLS_VERSION"
-if ($LASTEXITCODE -ne 0) { throw "Failed to install pip-tools==$PIP_TOOLS_VERSION" }
+# ---- ensure a pip-tools-compatible resolver toolchain
+# pip-tools 7.4.1 imports an internal pip symbol removed by pip 25, so pin pip
+# below that breaking change before installing/running the locked pip-tools.
+& $Python -m pip install --disable-pip-version-check --quiet 'pip<25' "pip-tools==$PIP_TOOLS_VERSION"
+if ($LASTEXITCODE -ne 0) { throw "Failed to install pip<25 and pip-tools==$PIP_TOOLS_VERSION" }
 
 function Invoke-PipCompile([string]$OutFile) {
     # --no-strip-extras keeps uvicorn[standard] extras resolvable at install time.
