@@ -110,7 +110,7 @@ $combined = $buildconfOut + "`n" + $versionOut
 $forbidden = @('--enable-gpl', '--enable-nonfree', '--enable-libx264', '--enable-libx265')
 foreach ($flag in $forbidden) {
     if ($combined -match [regex]::Escape($flag)) {
-        throw "Forbidden configure flag '$flag' present in ffmpeg build configuration — not redistributable under our LGPL policy.`n$buildconfOut"
+        throw "Forbidden configure flag '$flag' present in ffmpeg build configuration - not redistributable under our LGPL policy.`n$buildconfOut"
     }
 }
 Write-Step "License checks passed (LGPL, no gpl/nonfree/x264/x265 flags)."

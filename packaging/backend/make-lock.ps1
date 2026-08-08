@@ -95,7 +95,7 @@ if ($Check) {
     }
     $head = Get-Content -LiteralPath $LockFile -TotalCount 40
     if ($head -match 'LOCKFILE-PLACEHOLDER') {
-        Write-Error ("requirements-windows.lock is still the placeholder — it must be generated on Windows " +
+        Write-Error ("requirements-windows.lock is still the placeholder - it must be generated on Windows " +
                      "(run make-lock.ps1) and committed before building/releasing.")
         exit 1
     }
