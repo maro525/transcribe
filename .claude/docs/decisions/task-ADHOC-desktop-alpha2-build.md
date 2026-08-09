@@ -52,6 +52,7 @@ GitHub Actions の Windows CI を dispatch で安全に収束させた後、検�
 - 2026-08-09 [startproject] POST: Brief/Design/実装計画と Current Project を更新。Linear 投稿は `ADHOC` ローカル運用指定によりスキップ。解釈は一意で dispatch-first が安全面で支配的なため Gate 1 は自動承認（発動なし）。
 - 2026-08-09 [team-implement] POST: feature/desktop-alpha2-build で plan 1–7 を実施。Windows lock bootstrap #31265467430 は成功し、実生成 lock を commit。full dispatch #31265944707 を開始済み。tag は作成していない。Linear `ADHOC` は MCP 上で存在しないため開始コメント投稿は失敗し、ローカル task file に記録した。
 - 2026-08-09 [team-implement] POST: plan 8–11 を完了。final dispatch #31287481691 は Python/backend/NSIS の必須3ジョブと dispatch setup smoke が success。backend manifest と NSIS artifact を download して SHA/filename/size/URL contract を検証済み。tag は作成していない。
+- 2026-08-09 [team-implement] POST: review B1 を修正。softprops/action-gh-release を full SHA `3bb12739c298aeb8a4eeaf626c5b8d85266b0e65` (v2.6.2) に pin し、workflow default を `contents: read`、tag-only release-upload job のみ `contents: write` に限定。first-party actions も full SHA pin。dispatch #31288562702 の必須3ジョブと setup smoke は success、tag-only release upload は skipped。tag は作成していない。
 - 2026-08-09 [team-review] POST: **FAIL**。Windows CI/build・manifest 契約・draft release gate は確認できたが、release write 権限を持つ workflow が mutable tag の third-party action `softprops/action-gh-release@v2` を実行する supply-chain blocker を検出。full commit SHA pin（併せて job-level 最小権限化）後に再レビューが必要。Linear `ADHOC` は MCP 上に存在せず、開始/結果コメント投稿はいずれも失敗したため本ログで代替。
 
 ## Design
@@ -129,7 +130,7 @@ GitHub Actions の Windows CI を dispatch で安全に収束させた後、検�
 - dispatch E2E は silent-install setup smoke と tag-only first-run health smoke に分離し、workflow 上で明示。E2E は continue-on-error の非 blocking job。
 - tag asset upload は deploy が作成した draft pre-release かつ pre-release であることを workflow が確認してから実行する。tag/release 作成・publish は deploy phase のみが行う。
 - plan 8–11 完了。最終 dispatch の必須3ジョブと installer artifact を確認済み。tag/release は deploy phase のみが行う。
-- [team-implement] Review B1 remediation: default workflow permission is `contents: read`; only the tag-only `release-upload` job receives `contents: write`. `softprops/action-gh-release` is pinned to `3bb12739c298aeb8a4eeaf626c5b8d85266b0e65` (v2.6.2), and first-party checkout/setup-python/artifact actions are full-SHA pinned. The release-upload job verifies deploy's draft pre-release before upload. Dispatch revalidation pending.
+- [team-implement] Review B1 remediation: default workflow permission is `contents: read`; only the tag-only `release-upload` job receives `contents: write`. `softprops/action-gh-release` is pinned to `3bb12739c298aeb8a4eeaf626c5b8d85266b0e65` (v2.6.2), and first-party checkout/setup-python/artifact actions are full-SHA pinned. The release-upload job verifies deploy's draft pre-release before upload. Revalidation #31288562702: required three jobs and dispatch setup smoke succeeded; `release-upload` was skipped on dispatch as intended.
 
 ## Review
 
