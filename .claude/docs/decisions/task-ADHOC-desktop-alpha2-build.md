@@ -51,6 +51,7 @@ GitHub Actions の Windows CI を dispatch で安全に収束させた後、検�
 - 2026-08-09 [startproject] DECISION: 設計 subagent 用 `task` tool は本セッションで提供されていないため起動不可。独立性の代替として既存設計記録、実 run #30920957454、公式一次情報を突合し Lead が設計した。
 - 2026-08-09 [startproject] POST: Brief/Design/実装計画と Current Project を更新。Linear 投稿は `ADHOC` ローカル運用指定によりスキップ。解釈は一意で dispatch-first が安全面で支配的なため Gate 1 は自動承認（発動なし）。
 - 2026-08-09 [team-implement] POST: feature/desktop-alpha2-build で plan 1–7 を実施。Windows lock bootstrap #31265467430 は成功し、実生成 lock を commit。full dispatch #31265944707 を開始済み。tag は作成していない。Linear `ADHOC` は MCP 上で存在しないため開始コメント投稿は失敗し、ローカル task file に記録した。
+- 2026-08-09 [team-implement] POST: plan 8–11 を完了。final dispatch #31287481691 は Python/backend/NSIS の必須3ジョブと dispatch setup smoke が success。backend manifest と NSIS artifact を download して SHA/filename/size/URL contract を検証済み。tag は作成していない。
 
 ## Design
 
@@ -110,9 +111,10 @@ GitHub Actions の Windows CI を dispatch で安全に収束させた後、検�
 - Windows lock bootstrap: https://github.com/maro525/transcribe/actions/runs/31265467430 — Python tests と Windows dependency lock bootstrap success。
 - #31265944707 は Python dependency install が進行しないため cancel（transient/hung runner）。
 - #31266036663 — Python tests / lock check は success、backend relocation smoke が PowerShell による Python sentinel quote 脱落で失敗。`1d02f43` で修正。
-- current dispatch: https://github.com/maro525/transcribe/actions/runs/31266535375 — 必須3ジョブ、Windows Rust check、NSIS artifact、manifest integrity の最終確認待ち。
+- #31287481691（final dispatch）: https://github.com/maro525/transcribe/actions/runs/31287481691 — `python tests` / `backend archive` / `tauri NSIS build` はすべて success。dispatch setup smoke も success、tag-only first-run smoke は意図どおり skipped。
 - #31286093210: https://github.com/maro525/transcribe/actions/runs/31286093210 — `python tests` / `backend archive` / `tauri NSIS build` success。E2E は `continue-on-error` のため failure でも gate 外（dispatch manifest の `UNRELEASED-DEV-BUILD` を取得できないことが理由）。
 - Artifact verification (#31286093210): installer `Transcribe_0.1.0-alpha.2_x64-setup.exe`, SHA-256 `cbf0d73685db12c1f3c62d34fbf4454d3b56b58319635a6eb0a40aadbcb87036`, 37,048,028 bytes。backend `transcribe-backend-cpu-0.1.0-alpha.2-win64.zip`, SHA-256 `f107a973092591ca4c705fd1a8b2ef2ddfb3562743eac95295b1fe9ebd69ebb5`, 424,363,082 bytes。manifest の version/size/SHA と `.sha256` sidecar は一致し、dispatch URL は `https://github.com/maro525/transcribe/releases/download/UNRELEASED-DEV-BUILD/transcribe-backend-cpu-0.1.0-alpha.2-win64.zip`（tag build では同じ release の tag URL に解決）。
+- Final artifact verification (#31287481691): installer `Transcribe_0.1.0-alpha.2_x64-setup.exe`, SHA-256 `0284eb31aae845c3c4f3bd24d4b9c9c43900323a48d2532d531974a902940544`, 37,039,665 bytes。backend `transcribe-backend-cpu-0.1.0-alpha.2-win64.zip`, SHA-256 `623e5028ef56e78e9f54fe5d81a45b952a540cfae2ed7773fc15933224c095c1`, 424,363,083 bytes。manifest version/size/SHA と `.sha256` sidecar は archive 実測と一致。dispatch manifest URL は `https://github.com/maro525/transcribe/releases/download/UNRELEASED-DEV-BUILD/transcribe-backend-cpu-0.1.0-alpha.2-win64.zip`; tag build は `v0.1.0-alpha.2` release URL を使用する。
 
 ### Failure Loop
 - #31264984475: PS 5.1 non-ASCII parser failure → `4aef0a8`, `d2e6617`。
@@ -125,7 +127,7 @@ GitHub Actions の Windows CI を dispatch で安全に収束させた後、検�
 ### 残課題・注意点
 - dispatch E2E は silent-install setup smoke と tag-only first-run health smoke に分離し、workflow 上で明示。E2E は continue-on-error の非 blocking job。
 - tag asset upload は deploy が作成した draft pre-release かつ pre-release であることを workflow が確認してから実行する。tag/release 作成・publish は deploy phase のみが行う。
-- final dispatch は workflow metadata の上記明示化を含めて実行・確認する。tag/release は deploy phase のみが行う。
+- plan 8–11 完了。最終 dispatch の必須3ジョブと installer artifact を確認済み。tag/release は deploy phase のみが行う。
 
 ## Review
 <!-- team-review が記入 -->
