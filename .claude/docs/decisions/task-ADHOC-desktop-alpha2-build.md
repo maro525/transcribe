@@ -194,4 +194,26 @@ GitHub Actions の Windows CI を dispatch で安全に収束させた後、検�
 - [result] critical / major はゼロ。新規 blocker なし。初回 minor（stale コメント、CRLF、publish 後 first-run/実機確認）は申し送りとして継続する。
 
 ## Deploy
-<!-- deploy が記入 -->
+
+### デプロイ結果: BLOCKED
+
+### 実行内容
+- デプロイ日時: 2026-08-09T02:25:42Z
+- feature ブランチ: `feature/desktop-alpha2-build`
+- PR: https://github.com/maro525/transcribe/pull/20（merge commit `5a42ebe086741dedd292d41559ac54d08197e71a`）
+- immutable tag: `v0.1.0-alpha.2`（annotated tag `512a0ed8aef93efd535c717a9ba1016b2ddd3952`、`5a42ebe` を指す）
+- tag workflow: https://github.com/maro525/transcribe/actions/runs/31289158254
+
+### デプロイ後検証結果
+
+#### スモークテスト
+- tag workflow の Python tests、backend archive/relocation、Windows locked Rust check、NSIS build は success。
+- `upload verified release assets` は failure。draft/pre-release gate が `gh release view` を git checkout のない upload job で実行し、`fatal: not a git repository` となったため、asset upload は開始されなかった。
+- tag-only first-run smoke は asset 未添付のため failure（experimental/non-blocking）。
+
+### 申し送り事項
+- draft pre-release は未公開・asset なしのまま保持。tag は移動せず、公開済み asset の上書きも行っていない。
+- Failure Loop Policy に従い、release-upload job の repository context を修正する新しい commit を未タグで検証し、alpha.2 tag は再利用しない。修正が必要なら新しい pre-release version（例: alpha.3）で release transaction を開始する。
+
+### Decision Log
+- [deploy] BLOCKED: tag workflow #31289158254 の release-upload job は checkout 不在のため draft release の確認時に失敗。immutable `v0.1.0-alpha.2` tag は保持し、release は publish していない。
