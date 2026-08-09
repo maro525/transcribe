@@ -129,14 +129,13 @@ pub fn navigate_to_backend(
 #[cfg(windows)]
 fn install_permission_handler(window: &WebviewWindow, allowed_origin: AllowedOrigin) {
     let result = window.with_webview(move |platform_webview| {
-        use webview2_com::pwstr::take_pwstr;
+        use webview2_com::take_pwstr;
         use webview2_com::Microsoft::Web::WebView2::Win32::{
             COREWEBVIEW2_PERMISSION_KIND, COREWEBVIEW2_PERMISSION_KIND_MICROPHONE,
             COREWEBVIEW2_PERMISSION_STATE_ALLOW, COREWEBVIEW2_PERMISSION_STATE_DENY,
         };
         use webview2_com::PermissionRequestedEventHandler;
         use windows::core::PWSTR;
-        use windows::Win32::System::WinRT::EventRegistrationToken;
 
         // SAFETY: executed on the WebView's UI thread by with_webview; the
         // controller and core webview outlive the registered handler.
@@ -149,7 +148,7 @@ fn install_permission_handler(window: &WebviewWindow, allowed_origin: AllowedOri
                     return;
                 }
             };
-            let mut token = EventRegistrationToken::default();
+            let mut token: i64 = 0;
             let handler =
                 PermissionRequestedEventHandler::create(Box::new(move |_sender, args| {
                     let Some(args) = args else { return Ok(()) };
