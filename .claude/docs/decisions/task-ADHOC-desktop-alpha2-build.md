@@ -54,6 +54,7 @@ GitHub Actions の Windows CI を dispatch で安全に収束させた後、検�
 - 2026-08-09 [team-implement] POST: plan 8–11 を完了。final dispatch #31287481691 は Python/backend/NSIS の必須3ジョブと dispatch setup smoke が success。backend manifest と NSIS artifact を download して SHA/filename/size/URL contract を検証済み。tag は作成していない。
 - 2026-08-09 [team-implement] POST: review B1 を修正。softprops/action-gh-release を full SHA `3bb12739c298aeb8a4eeaf626c5b8d85266b0e65` (v2.6.2) に pin し、workflow default を `contents: read`、tag-only release-upload job のみ `contents: write` に限定。first-party actions も full SHA pin。dispatch #31288562702 の必須3ジョブと setup smoke は success、tag-only release upload は skipped。tag は作成していない。
 - 2026-08-09 [team-review] POST: **FAIL**。Windows CI/build・manifest 契約・draft release gate は確認できたが、release write 権限を持つ workflow が mutable tag の third-party action `softprops/action-gh-release@v2` を実行する supply-chain blocker を検出。full commit SHA pin（併せて job-level 最小権限化）後に再レビューが必要。Linear `ADHOC` は MCP 上に存在せず、開始/結果コメント投稿はいずれも失敗したため本ログで代替。
+- 2026-08-09 [team-review re-review] POST: **PASS**。B1 は解消済み。release action `3bb12739...` が upstream v2.6.2 commit と一致すること、workflow default `contents: read`、tag-only `release-upload` のみ `contents: write`、draft+pre-release gate、主要 artifact actions の full SHA pin を確認。再検証 run #31288562702 は必須3ジョブと setup smoke が success、release-upload は dispatch で意図どおり skipped。critical/major の新規指摘なし。Linear `ADHOC` は MCP 上に存在せず、開始/結果コメント投稿はいずれも失敗したため本ログで代替。
 
 ## Design
 
@@ -134,7 +135,9 @@ GitHub Actions の Windows CI を dispatch で安全に収束させた後、検�
 
 ## Review
 
-### 判定: FAIL
+### 判定: PASS（再レビュー 2026-08-09）
+
+> 初回判定は B1 により FAIL。`e96a951` の修正と run #31288562702 を再検証し、blocker 解消を確認した。以下の初回レビュー記録は監査証跡として保持する。
 
 ### コードレビュー統合結果
 
@@ -177,6 +180,18 @@ GitHub Actions の Windows CI を dispatch で安全に収束させた後、検�
 - deploy は draft pre-release → tag push → tag workflow → 4 asset の名称/SHA/size/manifest URL 検証 → publish の順序を維持し、tag を移動しない。
 - publish 後に tag-only first-run download、`/healthz`、終了時 orphan process、WASAPI/WebView2 microphone を実機確認する。
 - stale な「未検証」コメントを CI 検証済み範囲と実機未検証範囲に整理する。
+
+### 再レビュー結果（B1 remediation）
+
+#### 判定: PASS
+
+- [resolved] `softprops/action-gh-release` は full SHA `3bb12739c298aeb8a4eeaf626c5b8d85266b0e65` に固定され、GitHub API で upstream `v2.6.2` tag が同 commit を直接指すことを確認した。
+- [resolved] workflow default は `contents: read`。`contents: write` は `if: github.ref_type == 'tag'` の独立 `release-upload` job のみに限定され、build/test jobs は write token を受け取らない。
+- [resolved] release upload 前に `gh release view` の `isDraft == true` かつ `isPrerelease == true` を検証し、失敗時は upload step に到達しない。backend/installer upload を1 jobに集約したため、検証と upload の境界も明確になった。
+- [resolved] checkout、setup-python、upload-artifact、download-artifact は全て40桁 SHAに固定され、各 commit の存在を GitHub API で確認した。
+- [verified] run #31288562702（code commit `e96a951`）は python tests、backend archive/relocation、Windows locked Rust check、NSIS build、silent install/setup smoke が success。dispatch のため tag-only `release-upload` と first-run smoke は意図どおり skipped。
+- [verified] review head `e2a758a` と CI commit `e96a951` の差分は task document のみ。再レビュー対象 workflow は CI 実行時と同一。
+- [result] critical / major はゼロ。新規 blocker なし。初回 minor（stale コメント、CRLF、publish 後 first-run/実機確認）は申し送りとして継続する。
 
 ## Deploy
 <!-- deploy が記入 -->
