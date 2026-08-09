@@ -12,7 +12,7 @@
 
 [package]
 name = "transcribe-desktop"
-version = "0.1.0"
+version = "0.1.0-alpha.2"
 description = "Transcribe — local transcription desktop app (Tauri shell)"
 authors = ["nsketch"]
 edition = "2021"
@@ -61,7 +61,7 @@ windows = { version = "0.61", features = [
     "Win32_System_WinRT",
 ] }
 # WebView2 COM interop for the PermissionRequested handler (webview.rs).
-webview2-com = "0.37"
+webview2-com = "0.38"
 
 [profile.release]
 codegen-units = 1

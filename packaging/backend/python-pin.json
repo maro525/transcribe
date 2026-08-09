@@ -1,7 +1,7 @@
 {
   "_comment": [
     "Pin for the python-build-standalone (astral-sh) CPython runtime used by build.ps1.",
-    "STATUS: PLACEHOLDER — sha256 (and probably release_tag) MUST be pinned before first release.",
+    "Pinned against the 20260807 release SHA256SUMS and a local download SHA-256.",
     "How to pin:",
     "  1. Open https://github.com/astral-sh/python-build-standalone/releases and pick a dated release tag.",
     "  2. Choose the asset: cpython-3.12.<patch>+<release_tag>-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
@@ -11,8 +11,8 @@
     "     cross-check against the SHA256SUMS file attached to the same GitHub release, and set 'sha256'.",
     "build.ps1 refuses to run while sha256 starts with 'REPLACE_ME'."
   ],
-  "python_version": "3.12.11",
-  "release_tag": "20250712",
-  "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20250712/cpython-3.12.11+20250712-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
-  "sha256": "REPLACE_ME_WITH_REAL_SHA256_FROM_RELEASE_SHA256SUMS"
+  "python_version": "3.12.13",
+  "release_tag": "20260807",
+  "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260807/cpython-3.12.13+20260807-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+  "sha256": "18bcc65b17921806b72cdc88bcf000bf67a2c99a8fc381fe1629f2b9ba56858d"
 }

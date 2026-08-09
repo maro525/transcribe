@@ -23,12 +23,17 @@ on:
         description: "Backend runtime version (manifest 'version'), e.g. cpu-2026.07.1"
         required: false
         default: "cpu-0.0.0-dev"
+      bootstrap_lock:
+        description: "Generate Windows lock artifact rather than requiring the committed lock"
+        required: false
+        type: boolean
+        default: false
   push:
     tags:
       - "v*"
 
 permissions:
-  contents: write # needed to upload release assets on tag builds
+  contents: read
 
 env:
   PYTHON_VERSION: "3.12"
@@ -41,9 +46,9 @@ jobs:
     name: python tests (ubuntu)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -60,14 +65,53 @@ jobs:
   # ---------------------------------------------------------------------------
   # 2. Backend runtime archive (python-build-standalone + locked site-packages).
   # ---------------------------------------------------------------------------
+  lock-bootstrap:
+    name: Windows dependency lock bootstrap
+    runs-on: windows-2022
+    needs: python-tests
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap_lock }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          architecture: x64
+
+      - name: Parse packaging scripts with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $scripts = @('packaging\backend\make-lock.ps1', 'packaging\backend\build.ps1', 'packaging\ffmpeg\fetch.ps1')
+          foreach ($script in $scripts) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $script), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
+          }
+
+      - name: Generate requirements-windows.lock
+        shell: powershell
+        run: |
+          powershell -ExecutionPolicy Bypass -File packaging\backend\make-lock.ps1
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Upload requirements-windows.lock artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: requirements-windows-lock
+          path: packaging/backend/requirements-windows.lock
+          if-no-files-found: error
+
   backend-archive:
     name: backend archive (windows)
     runs-on: windows-2022
     needs: python-tests
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.bootstrap_lock) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: x64
@@ -110,7 +154,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Upload backend archive artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: backend-archive
           path: |
@@ -118,15 +162,6 @@ jobs:
             packaging/backend/dist/*.zip.sha256
             packaging/backend/dist/backend-manifest.json
           if-no-files-found: error
-
-      - name: Attach backend archive to GitHub Release (tags only)
-        if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            packaging/backend/dist/*.zip
-            packaging/backend/dist/*.zip.sha256
-            packaging/backend/dist/backend-manifest.json
 
   # ---------------------------------------------------------------------------
   # 3. Tauri shell build (NSIS, unsigned v1). No Node/npm: the frontend is
@@ -137,8 +172,9 @@ jobs:
     name: tauri NSIS build (windows)
     runs-on: windows-2022
     needs: backend-archive
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.bootstrap_lock) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Verify src-tauri exists (owned by Phase B)
         shell: powershell
@@ -149,7 +185,7 @@ jobs:
           }
 
       - name: Download backend manifest (bundled as Tauri resource)
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: backend-archive
           path: backend-dist
@@ -192,6 +228,21 @@ jobs:
         with:
           workspaces: src-tauri
 
+      - name: Check Rust shell (locked, Windows MSVC)
+        shell: powershell
+        working-directory: src-tauri
+        run: |
+          cargo check --target x86_64-pc-windows-msvc --locked
+          cargo tree -p wry --locked | Out-File -FilePath "$env:RUNNER_TEMP\wry-dependency-tree.txt" -Encoding utf8
+
+      - name: Upload Rust dependency diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rust-dependency-diagnostics
+          path: ${{ runner.temp }}/wry-dependency-tree.txt
+          if-no-files-found: warn
+
       - name: Install tauri-cli
         shell: powershell
         # NOTE: cargo install is slow (~5-10 min) on cache miss; Swatinem/rust-cache
@@ -216,18 +267,12 @@ jobs:
       # -----------------------------------------------------------------------
 
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: nsis-installer
           # Default Tauri bundle output path; adjust if Phase B changes target dir.
           path: src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: error
-
-      - name: Attach installer to GitHub Release (tags only)
-        if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: src-tauri/target/release/bundle/nsis/*.exe
 
   # ---------------------------------------------------------------------------
   # 4. EXPERIMENTAL end-to-end smoke test. Marked continue-on-error: this job is
@@ -242,10 +287,11 @@ jobs:
     name: e2e smoke (windows, EXPERIMENTAL)
     runs-on: windows-2022
     needs: tauri-build
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.bootstrap_lock) }}
     continue-on-error: true
     steps:
       - name: Download installer artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: nsis-installer
           path: installer
@@ -260,7 +306,17 @@ jobs:
           Write-Host "Installer exit code: $($p.ExitCode)"
           if ($p.ExitCode -ne 0) { exit 1 }
 
-      - name: Launch app and poll /healthz via dynamic port from logs
+      - name: Dispatch setup smoke complete
+        if: github.ref_type != 'tag'
+        shell: powershell
+        run: |
+          # Dispatch artifacts deliberately point at UNRELEASED-DEV-BUILD.
+          # Successful silent installation is the non-blocking setup smoke;
+          # first-run runtime download and healthz require release assets.
+          Write-Host "Dispatch setup smoke passed; tag-only first-run smoke is intentionally skipped."
+
+      - name: Tag-only first-run smoke via dynamic port and /healthz
+        if: github.ref_type == 'tag'
         shell: powershell
         timeout-minutes: 15
         run: |
@@ -314,3 +370,43 @@ jobs:
             exit 1
           }
           Write-Host "No orphan python/ffmpeg processes. Smoke test passed."
+
+  # Tag upload is isolated from the build/test jobs so it is the only job that
+  # receives a write token. Deploy creates the draft pre-release beforehand.
+  release-upload:
+    name: upload verified release assets
+    runs-on: ubuntu-latest
+    needs: tauri-build
+    if: github.ref_type == 'tag'
+    permissions:
+      contents: write
+    steps:
+      - name: Download backend archive
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: backend-archive
+          path: release-assets/backend
+
+      - name: Download NSIS installer
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nsis-installer
+          path: release-assets/nsis
+
+      - name: Verify deploy-created draft pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release="$(gh release view "${{ github.ref_name }}" --json isDraft,isPrerelease)"
+          test "$(jq -r .isDraft <<<"$release")" = true
+          test "$(jq -r .isPrerelease <<<"$release")" = true
+
+      - name: Upload verified assets to draft pre-release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          files: |
+            release-assets/backend/*.zip
+            release-assets/backend/*.zip.sha256
+            release-assets/backend/backend-manifest.json
+            release-assets/nsis/*.exe

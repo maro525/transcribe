@@ -98,7 +98,11 @@ fn origin_of(url: &Url) -> Option<String> {
 
 /// Publishes the backend origin and navigates the main window to it.
 /// Call only after /healthz succeeded.
-pub fn navigate_to_backend(app: &AppHandle, allowed: &AllowedOrigin, port: u16) -> Result<(), String> {
+pub fn navigate_to_backend(
+    app: &AppHandle,
+    allowed: &AllowedOrigin,
+    port: u16,
+) -> Result<(), String> {
     let origin = format!("http://127.0.0.1:{port}");
     if let Ok(mut guard) = allowed.write() {
         *guard = Some(origin.clone());
@@ -108,7 +112,9 @@ pub fn navigate_to_backend(app: &AppHandle, allowed: &AllowedOrigin, port: u16) 
         .ok_or_else(|| "main window not found".to_string())?;
     let url = Url::parse(&format!("{origin}/")).map_err(|e| e.to_string())?;
     // WebviewWindow::navigate — tauri 2.x. 【未検証】signature/mutability.
-    window.navigate(url).map_err(|e| format!("navigate failed: {e}"))
+    window
+        .navigate(url)
+        .map_err(|e| format!("navigate failed: {e}"))
 }
 
 /// Registers a native WebView2 PermissionRequested handler that grants ONLY
@@ -123,14 +129,13 @@ pub fn navigate_to_backend(app: &AppHandle, allowed: &AllowedOrigin, port: u16) 
 #[cfg(windows)]
 fn install_permission_handler(window: &WebviewWindow, allowed_origin: AllowedOrigin) {
     let result = window.with_webview(move |platform_webview| {
-        use webview2_com::pwstr::take_pwstr;
+        use webview2_com::take_pwstr;
         use webview2_com::Microsoft::Web::WebView2::Win32::{
             COREWEBVIEW2_PERMISSION_KIND, COREWEBVIEW2_PERMISSION_KIND_MICROPHONE,
             COREWEBVIEW2_PERMISSION_STATE_ALLOW, COREWEBVIEW2_PERMISSION_STATE_DENY,
         };
         use webview2_com::PermissionRequestedEventHandler;
         use windows::core::PWSTR;
-        use windows::Win32::System::WinRT::EventRegistrationToken;
 
         // SAFETY: executed on the WebView's UI thread by with_webview; the
         // controller and core webview outlive the registered handler.
@@ -143,9 +148,9 @@ fn install_permission_handler(window: &WebviewWindow, allowed_origin: AllowedOri
                     return;
                 }
             };
-            let mut token = EventRegistrationToken::default();
-            let handler = PermissionRequestedEventHandler::create(Box::new(
-                move |_sender, args| {
+            let mut token: i64 = 0;
+            let handler =
+                PermissionRequestedEventHandler::create(Box::new(move |_sender, args| {
                     let Some(args) = args else { return Ok(()) };
                     let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
                     args.PermissionKind(&mut kind)?;
@@ -157,9 +162,7 @@ fn install_permission_handler(window: &WebviewWindow, allowed_origin: AllowedOri
                         .read()
                         .ok()
                         .and_then(|g| g.clone())
-                        .map(|origin| {
-                            uri == origin || uri.starts_with(&format!("{origin}/"))
-                        })
+                        .map(|origin| uri == origin || uri.starts_with(&format!("{origin}/")))
                         .unwrap_or(false);
 
                     let state = if origin_ok && kind == COREWEBVIEW2_PERMISSION_KIND_MICROPHONE {
@@ -172,8 +175,7 @@ fn install_permission_handler(window: &WebviewWindow, allowed_origin: AllowedOri
                     };
                     args.SetState(state)?;
                     Ok(())
-                },
-            ));
+                }));
             if let Err(e) = core.add_PermissionRequested(&handler, &mut token) {
                 eprintln!("[webview] add_PermissionRequested failed: {e}");
             }
