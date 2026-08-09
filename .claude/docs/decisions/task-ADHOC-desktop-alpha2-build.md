@@ -111,6 +111,8 @@ GitHub Actions の Windows CI を dispatch で安全に収束させた後、検�
 - #31265944707 は Python dependency install が進行しないため cancel（transient/hung runner）。
 - #31266036663 — Python tests / lock check は success、backend relocation smoke が PowerShell による Python sentinel quote 脱落で失敗。`1d02f43` で修正。
 - current dispatch: https://github.com/maro525/transcribe/actions/runs/31266535375 — 必須3ジョブ、Windows Rust check、NSIS artifact、manifest integrity の最終確認待ち。
+- #31286093210: https://github.com/maro525/transcribe/actions/runs/31286093210 — `python tests` / `backend archive` / `tauri NSIS build` success。E2E は `continue-on-error` のため failure でも gate 外（dispatch manifest の `UNRELEASED-DEV-BUILD` を取得できないことが理由）。
+- Artifact verification (#31286093210): installer `Transcribe_0.1.0-alpha.2_x64-setup.exe`, SHA-256 `cbf0d73685db12c1f3c62d34fbf4454d3b56b58319635a6eb0a40aadbcb87036`, 37,048,028 bytes。backend `transcribe-backend-cpu-0.1.0-alpha.2-win64.zip`, SHA-256 `f107a973092591ca4c705fd1a8b2ef2ddfb3562743eac95295b1fe9ebd69ebb5`, 424,363,082 bytes。manifest の version/size/SHA と `.sha256` sidecar は一致し、dispatch URL は `https://github.com/maro525/transcribe/releases/download/UNRELEASED-DEV-BUILD/transcribe-backend-cpu-0.1.0-alpha.2-win64.zip`（tag build では同じ release の tag URL に解決）。
 
 ### Failure Loop
 - #31264984475: PS 5.1 non-ASCII parser failure → `4aef0a8`, `d2e6617`。
@@ -118,9 +120,12 @@ GitHub Actions の Windows CI を dispatch で安全に収束させた後、検�
 - #31265339224: pip-tools 7.4.1 vs pip 25 → `b3f38e1`。
 - #31265706105: volatile temporary output path in lock header → `ea3150e`。
 - #31266036663 / backend archive / `print("RELOCATION_SMOKE_OK", ...)` が PowerShell quote で崩れて `NameError` → `1d02f43`。
+- #31267509404 / NSIS build / webview2-com 0.37 と wry 0.55 の 0.38 bindings が混在 → `6d67f2b`（0.38 に整合、public `take_pwstr`、i64 token）。
 
 ### 残課題・注意点
-- plan 8–11 は full dispatch 完走後に完了。tag/release は deploy phase のみが行う。
+- dispatch E2E は silent-install setup smoke と tag-only first-run health smoke に分離し、workflow 上で明示。E2E は continue-on-error の非 blocking job。
+- tag asset upload は deploy が作成した draft pre-release かつ pre-release であることを workflow が確認してから実行する。tag/release 作成・publish は deploy phase のみが行う。
+- final dispatch は workflow metadata の上記明示化を含めて実行・確認する。tag/release は deploy phase のみが行う。
 
 ## Review
 <!-- team-review が記入 -->
