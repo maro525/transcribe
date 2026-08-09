@@ -52,6 +52,7 @@ GitHub Actions の Windows CI を dispatch で安全に収束させた後、検�
 - 2026-08-09 [startproject] POST: Brief/Design/実装計画と Current Project を更新。Linear 投稿は `ADHOC` ローカル運用指定によりスキップ。解釈は一意で dispatch-first が安全面で支配的なため Gate 1 は自動承認（発動なし）。
 - 2026-08-09 [team-implement] POST: feature/desktop-alpha2-build で plan 1–7 を実施。Windows lock bootstrap #31265467430 は成功し、実生成 lock を commit。full dispatch #31265944707 を開始済み。tag は作成していない。Linear `ADHOC` は MCP 上で存在しないため開始コメント投稿は失敗し、ローカル task file に記録した。
 - 2026-08-09 [team-implement] POST: plan 8–11 を完了。final dispatch #31287481691 は Python/backend/NSIS の必須3ジョブと dispatch setup smoke が success。backend manifest と NSIS artifact を download して SHA/filename/size/URL contract を検証済み。tag は作成していない。
+- 2026-08-09 [team-review] POST: **FAIL**。Windows CI/build・manifest 契約・draft release gate は確認できたが、release write 権限を持つ workflow が mutable tag の third-party action `softprops/action-gh-release@v2` を実行する supply-chain blocker を検出。full commit SHA pin（併せて job-level 最小権限化）後に再レビューが必要。Linear `ADHOC` は MCP 上に存在せず、開始/結果コメント投稿はいずれも失敗したため本ログで代替。
 
 ## Design
 
@@ -128,9 +129,53 @@ GitHub Actions の Windows CI を dispatch で安全に収束させた後、検�
 - dispatch E2E は silent-install setup smoke と tag-only first-run health smoke に分離し、workflow 上で明示。E2E は continue-on-error の非 blocking job。
 - tag asset upload は deploy が作成した draft pre-release かつ pre-release であることを workflow が確認してから実行する。tag/release 作成・publish は deploy phase のみが行う。
 - plan 8–11 完了。最終 dispatch の必須3ジョブと installer artifact を確認済み。tag/release は deploy phase のみが行う。
+- [team-implement] Review B1 remediation: default workflow permission is `contents: read`; only the tag-only `release-upload` job receives `contents: write`. `softprops/action-gh-release` is pinned to `3bb12739c298aeb8a4eeaf626c5b8d85266b0e65` (v2.6.2), and first-party checkout/setup-python/artifact actions are full-SHA pinned. The release-upload job verifies deploy's draft pre-release before upload. Dispatch revalidation pending.
 
 ## Review
-<!-- team-review が記入 -->
+
+### 判定: FAIL
+
+### コードレビュー統合結果
+
+#### Quality Reviewer
+- [minor] `.github/workflows/desktop-windows.yml:4-5`、`src-tauri/Cargo.toml:3-5`、複数 Rust module の冒頭コメントが「未実行・未コンパイル」のままで、final Windows run #31287481691 の成功証跡と齟齬がある。保守時の判断を誤らせるため、実機未検証項目（WASAPI/WebView2 first-run 等）だけに限定して更新すること。
+- [minor] Windows 生成 `requirements-windows.lock` は CRLF のため `git diff --check` が大量の trailing whitespace として報告する。lock 自体の動作には影響せず、`make-lock.ps1 -Check` と backend build は CI で成功している。
+
+#### Logic Reviewer
+- [minor] manifest 契約は整合している。tag `v0.1.0-alpha.2` では backend version `cpu-0.1.0-alpha.2`、asset 名 `transcribe-backend-cpu-0.1.0-alpha.2-win64.zip`、同一 release URL、実 SHA-256/size が downloader の HTTPS・size・SHA-256 検証と一致することを静的確認した。
+- [minor] release transaction は draft pre-release の存在確認後だけ asset upload し、公開は deploy phase に分離されている。途中失敗で部分 release が公開される経路は確認されなかった。tag-only first-run smoke は draft asset が public download できない可能性を含むため非 blocking のままであり、publish 後の再取得検証が必須。
+
+#### Security Reviewer
+- [major] `.github/workflows/desktop-windows.yml:35-36,177-184,308-312` — workflow 全体に `contents: write` を付与した状態で、full commit SHA ではなく mutable tag の third-party action `softprops/action-gh-release@v2` を実行している。upstream tag の侵害・移動時に release write token と生成 artifact を奪われ、release asset 改ざん/公開につながる supply-chain blocker。既知の commit SHA に pin し、可能なら build/test は `contents: read`、release upload を行う job/step のみ `contents: write` に分離すること。
+- [minor] python-build-standalone / FFmpeg は dated URL + pinned SHA-256 で取得し、backend archive は downloader が size + SHA-256 を検証する。FFmpeg は LGPL 表示、GPL/nonfree/x264/x265 flag、LICENSE/SOURCE 同梱を CI で検査しており、対象範囲に checksum bypass や hardcoded secret は確認されなかった。
+- [minor] `.claude/rules/security.md` はリポジトリに存在しなかったため、指定された認証・入力検証・secret・injection・supply-chain 観点で代替レビューした。
+
+#### Simplify Reviewer
+- [minor] backend と installer で draft/pre-release 検証 + upload が重複しているが、job dependency と成果物所有が明確で、現時点で共通化する方が workflow を複雑化する。重複は許容範囲。
+- [minor] lock bootstrap と通常 build の条件分岐、dispatch setup smoke と tag-only first-run smoke の分離にはそれぞれ failure loop と公開 asset 契約上の理由があり、デッド経路とは判定しない。
+
+#### 統合サマリー
+- release transaction、version/asset/manifest 契約、Windows lock/pin、PowerShell 5.1 parser 対応、Cargo.lock/webview2 coupling は CI 証跡と差分上で整合している。
+- Security と Quality の観点を統合し、write token を渡す mutable third-party action を release blocker（major）と判定した。これが唯一の FAIL 条件。
+
+### 動作検証結果
+
+#### ブラウザ表示確認（該当時）
+- 通常ブラウザ UI 変更はなし。Windows WebView2/初回 download は tag/release 前のため本環境では未確認。
+- dispatch #31287481691 の NSIS silent install + setup smoke は success。tag-only first-run health smoke は設計どおり skipped。
+
+#### テスト実行結果（該当時）
+- `gh run view 31287481691 --json ...`: success。`python tests`、Windows lock check/backend relocation、FFmpeg verification、`cargo check --target x86_64-pc-windows-msvc --locked`、NSIS build、silent install がすべて success。CI head `0c686584...` から review head `e784e89...` までの差分は task document のみ。
+- `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`: success。
+- `cargo check --manifest-path src-tauri/Cargo.toml --locked`: Linux host の GLib/GObject system package 不在で失敗。Windows target の成否は上記 CI success を採用。
+- `python -m pytest -q`: host に `python` executable がなく未実行。上記 CI の pytest step success を採用。
+- `git diff --check main...feature/desktop-alpha2-build`: Windows lock の CRLF を trailing whitespace として報告。コード差分の機能 failure ではない。
+
+### 申し送り事項（minor）
+- blocker 修正後、同一 commit で dispatch を再実行し、必須3ジョブ success を確認してから immutable tag を作る。
+- deploy は draft pre-release → tag push → tag workflow → 4 asset の名称/SHA/size/manifest URL 検証 → publish の順序を維持し、tag を移動しない。
+- publish 後に tag-only first-run download、`/healthz`、終了時 orphan process、WASAPI/WebView2 microphone を実機確認する。
+- stale な「未検証」コメントを CI 検証済み範囲と実機未検証範囲に整理する。
 
 ## Deploy
 <!-- deploy が記入 -->
