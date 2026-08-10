@@ -398,7 +398,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          release="$(gh release view "${{ github.ref_name }}" --json isDraft,isPrerelease)"
+          release="$(gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" --json isDraft,isPrerelease)"
           test "$(jq -r .isDraft <<<"$release")" = true
           test "$(jq -r .isPrerelease <<<"$release")" = true
 
