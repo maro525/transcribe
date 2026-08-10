@@ -4,7 +4,7 @@
 - linear_id: ADHOC
 - tier: L
 - created: 2026-08-02
-- status: planning
+- status: done
 
 ## Brief
 
@@ -194,4 +194,34 @@ GitHub Actions の Windows CI を dispatch で安全に収束させた後、検�
 - [result] critical / major はゼロ。新規 blocker なし。初回 minor（stale コメント、CRLF、publish 後 first-run/実機確認）は申し送りとして継続する。
 
 ## Deploy
-<!-- deploy が記入 -->
+
+### デプロイ結果: SUCCESS
+
+### 実行内容
+- デプロイ日時: 2026-08-10T02:00:00Z
+- feature ブランチ: `feature/desktop-alpha2-build`
+- PR: https://github.com/maro525/transcribe/pull/20（merge commit `5a42ebe086741dedd292d41559ac54d08197e71a`）
+- immutable tag: `v0.1.0-alpha.2`（annotated tag `512a0ed8aef93efd535c717a9ba1016b2ddd3952`、target `5a42ebe086741dedd292d41559ac54d08197e71a`）
+- tag workflow: https://github.com/maro525/transcribe/actions/runs/31289158254
+- release: https://github.com/maro525/transcribe/releases/tag/v0.1.0-alpha.2（published pre-release）
+- tag workflow の build/test jobs は success。`release-upload` は checkout 不在で `gh release view` が repository context を解決できず失敗したため、deploy が同 run の artifact を検証して draft release へ手動 upload し、その後 publish した。
+
+### デプロイ後検証結果
+
+#### スモークテスト
+- Python tests、backend archive/relocation、Windows locked Rust check、NSIS build、silent install は tag workflow で success。
+- tag-only first-run smoke は asset upload 前に実行されたため failure。experimental/non-blocking として release notes に記録。実機での初回 download、`/healthz`、orphan process、WASAPI/WebView2 microphone は継続して未検証。
+
+#### 公開 asset 検証
+- `Transcribe_0.1.0-alpha.2_x64-setup.exe`: `37,040,244 bytes`、SHA-256 `cf601a27e9b046eb5c257d927202c53db505fb50973aa490843d16b706feb5f8`。
+- `transcribe-backend-cpu-0.1.0-alpha.2-win64.zip`: `424,363,084 bytes`、SHA-256 `44f53fdeebb0f7521436b326651eb3a294d00bbfd0ea58e212bda59065d2ebd1`。
+- `.sha256` sidecar、manifest の SHA-256 / size、manifest URL `https://github.com/maro525/transcribe/releases/download/v0.1.0-alpha.2/transcribe-backend-cpu-0.1.0-alpha.2-win64.zip` は backend zip の公開後再ダウンロード実測と一致。
+- Implementation Notes の `#31287481691` にある installer `0284eb31...` / backend `623e5028...` は B1 remediation 前の別 commit に由来する参考値であり、tag run asset の期待値には用いない。
+
+### 申し送り事項
+- `v0.1.0-alpha.2` tag は immutable のまま維持し、公開 asset を上書きしていない。
+- 次回 release 向けに release-upload repository-context 修正を PR #21 として merge 済み: https://github.com/maro525/transcribe/pull/21（merge commit `56b3d2e990967449825d9c824f2edbeed38bedfc`）。`gh release view` に `--repo "${{ github.repository }}"` を指定し、checkout 非依存にした。
+- team-review minor: stale verification comments の整理、CRLF lockfile の `git diff --check` ノイズへの注意、実機 E2E の実施を推奨。
+
+### Decision Log
+- [deploy] POST: draft pre-release → immutable tag → tag workflow → artifact 自己整合性検証 → 手動 upload →公開後再ダウンロード検証 → publish を完了。Linear ID `ADHOC` はローカル運用のため投稿・ステータス更新をスキップ。
