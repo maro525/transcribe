@@ -405,6 +405,10 @@ jobs:
       - name: Upload verified assets to draft pre-release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
+          # Keep the release a draft pre-release after upload: publish only
+          # after the post-upload asset re-download verification (deploy).
+          draft: true
+          prerelease: true
           files: |
             release-assets/backend/*.zip
             release-assets/backend/*.zip.sha256
