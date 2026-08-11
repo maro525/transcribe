@@ -48,15 +48,24 @@ def run() -> None:
         print(f"Whisper model: {resolved.name} ({resolved.reason})")
 
         whisper_model = get_whisper_model(resolved.name)
-        diarization_pipeline = get_diarization_pipeline(
-            hf_token=hf_token,
-            cache_dir=config.CACHE_DIR,
-            model_name=config.DIARIZATION_MODEL,
-            device=device,
-        )
+        if hf_token:
+            diarization_pipeline = get_diarization_pipeline(
+                hf_token=hf_token,
+                cache_dir=config.CACHE_DIR,
+                model_name=config.DIARIZATION_MODEL,
+                device=device,
+            )
+            diarization_state = "on"
+        else:
+            # Token optional: transcribe single-speaker instead of dying at
+            # startup (desktop setup marks the HF token as 任意).
+            diarization_pipeline = None
+            diarization_state = "off (HF_TOKEN unset)"
+            print("HF_TOKEN not set: speaker diarization disabled")
         audio_cropper = get_audio_cropper(config.SAMPLE_RATE)
         store.set_system_message(
-            f"ready (device: {device}, whisper: {resolved.name} — {resolved.reason})"
+            f"ready (device: {device}, whisper: {resolved.name} — {resolved.reason}"
+            f", diarization: {diarization_state})"
         )
         worker_state.set_state(worker_state.WORKER_READY)
     except Exception as error:

@@ -34,7 +34,9 @@ def diarize_and_transcribe(
     into TranscriptSegments. Public contract is unchanged: returns
     list[TranscriptSegment] in time order and fires on_segment once per segment
     in time order. ``audio_cropper`` is accepted for signature compatibility but
-    unused in ASR-first mode.
+    unused in ASR-first mode. ``diarization_pipeline`` may be None (HF token
+    not configured): diarization is then skipped and every word falls back to
+    the single fallback speaker.
     """
     print(f"Processing: {file_path}")
     wav_path, temporary_file_created = ensure_wav(file_path, temp_dir, sample_rate)
@@ -49,11 +51,17 @@ def diarize_and_transcribe(
         )
         words = words_from_whisper_result(transcription)
 
-        diarization = diarization_pipeline(str(wav_path), num_speakers=num_speakers)
-        turns = [
-            Turn(speaker=speaker, start=float(segment.start), end=float(segment.end))
-            for segment, _, speaker in diarization.itertracks(yield_label=True)
-        ]
+        if diarization_pipeline is None:
+            # No HF token (diarization disabled): with no turns,
+            # assign_words_to_turns labels every word with its fallback
+            # speaker — single-speaker output.
+            turns = []
+        else:
+            diarization = diarization_pipeline(str(wav_path), num_speakers=num_speakers)
+            turns = [
+                Turn(speaker=speaker, start=float(segment.start), end=float(segment.end))
+                for segment, _, speaker in diarization.itertracks(yield_label=True)
+            ]
 
         results = assign_words_to_turns(
             words, turns, min_turn_seconds=min_segment_seconds
