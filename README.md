@@ -143,9 +143,9 @@ winget install ffmpeg
 sudo apt install ffmpeg
 ```
 
-### 5. HuggingFace トークンの設定
+### 5. HuggingFace トークンの設定（任意）
 
-pyannote の話者分離モデルは gated model のため、[HuggingFace のトークン](https://huggingface.co/settings/tokens) が必要です。対象モデル（`pyannote/speaker-diarization-3.1`）の利用規約に同意したうえで、`.env` を作成してトークンを設定してください。
+話者分離（pyannote）を使う場合のみ、[HuggingFace のトークン](https://huggingface.co/settings/tokens) が必要です。対象モデル（`pyannote/speaker-diarization-3.1`）の利用規約に同意したうえで、`.env` を作成してトークンを設定してください。トークン未設定でも書き起こしは動作しますが、話者分離は行われず全発話が単一話者（`SPEAKER_00`）として出力されます。
 
 ```bash
 # .env
@@ -164,7 +164,7 @@ python main.py
 
 | 変数名 | デフォルト | 説明 |
 | --- | --- | --- |
-| `HF_TOKEN` | （必須） | pyannote 用の HuggingFace アクセストークン |
+| `HF_TOKEN` | （任意） | pyannote 話者分離用の HuggingFace アクセストークン。未設定時は話者分離オフ（単一話者出力）で動作 |
 | `WHISPER_MODEL` | （未設定） | 使用する Whisper モデルを明示指定（例 `medium` / `large-v3`）。設定時は常に優先され `BATCH_WHISPER_MODE` を無視。未設定時は `BATCH_WHISPER_MODE` に従う（既定 `medium`） |
 | `BATCH_WHISPER_MODE` | `light` | バッチのモデル階層。`light`=`medium`（既定）/ `strong`=`large-v3-turbo` / `max`=`large-v3`。`strong`/`max` は GPU オプトイン。CUDA 非搭載ホストでは `medium` にフォールバックし、起動ログに理由を表示。`WHISPER_MODEL` 未設定時のみ参照。※起動時に環境変数として読み込むため、`.env` ファイルではなく実環境変数で指定すること |
 | `NUM_SPEAKERS` | `2` | 話者分離で想定する話者数 |
