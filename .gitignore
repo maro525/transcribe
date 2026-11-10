@@ -23,3 +23,7 @@ done/*
 
 # OS
 .DS_Store
+
+# Claude Code の TASK_FILE はリポジトリに置かない（~/.local/share/harness/tasks/ へ）
+.claude/docs/decisions/*
+!.claude/docs/decisions/.gitkeep
