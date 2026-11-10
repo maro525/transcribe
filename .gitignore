@@ -27,3 +27,5 @@ done/*
 # Claude Code の TASK_FILE はリポジトリに置かない（~/.local/share/harness/tasks/ へ）
 .claude/docs/decisions/*
 !.claude/docs/decisions/.gitkeep
+.claude/docs/research/*
+!.claude/docs/research/.gitkeep
